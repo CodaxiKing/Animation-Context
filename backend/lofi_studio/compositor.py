@@ -65,3 +65,35 @@ def splice(base: Path, clips: list[tuple[Path, float, float]], out: Path) -> Pat
     if res.returncode != 0:
         raise RuntimeError("FFmpeg falhou ao montar os clipes: " + res.stderr[-1500:])
     return out
+
+
+def last_frame(video: Path, dest: Path) -> Path:
+    """Último quadro do vídeo em PNG (início do próximo clipe encadeado)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    res = subprocess.run([motor.ffmpeg_exe(), "-loglevel", "error", "-y", "-sseof", "-0.25", "-i", str(video),
+                          "-update", "1", "-q:v", "1", str(dest)], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    if res.returncode != 0 or not dest.is_file():
+        raise RuntimeError(f"não consegui extrair o último quadro de {video.name}: {res.stderr[-500:]}")
+    return dest
+
+
+def concat(parts: list[Path], out: Path) -> Path:
+    """Emenda clipes encadeados num só (tira o 1º quadro das partes seguintes, que repete o último da anterior)."""
+    if len(parts) == 1:
+        out.write_bytes(parts[0].read_bytes())
+        return out
+    first = probe(parts[0])
+    chains = []
+    for i in range(len(parts)):
+        trim = "trim=start_frame=1," if i else ""
+        chains.append(f"[{i}:v]{trim}scale={first.width}:{first.height},fps={first.fps},setpts=PTS-STARTPTS[p{i}]")
+    filt = ";".join(chains) + ";" + "".join(f"[p{i}]" for i in range(len(parts))) + f"concat=n={len(parts)}:v=1:a=0[v]"
+    cmd = [motor.ffmpeg_exe(), "-loglevel", "error", "-y"]
+    for p in parts:
+        cmd += ["-i", str(p)]
+    cmd += ["-filter_complex", filt, "-map", "[v]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", str(out)]
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if res.returncode != 0:
+        raise RuntimeError("FFmpeg falhou ao emendar os clipes: " + res.stderr[-1500:])
+    return out

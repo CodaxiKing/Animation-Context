@@ -1,6 +1,8 @@
 import subprocess
+from pathlib import Path
 
 import numpy as np
+from PIL import Image
 import pytest
 from conftest import FakeComfy, figure_png
 from fastapi.testclient import TestClient
@@ -80,12 +82,60 @@ def test_video_clip_job_and_export_with_clip(fake_registry, monkeypatch, tmp_pat
         scene0 = client.get(f"/api/episodes/{ep['id']}/scenes").json()[0]
         assert scene0["shot"]["video_clip"] == "ep01/clips/scene000_v1.mp4"
 
+        # o quadro que foi para o Wan é só a cena: sem o selo "EP 1" que a prévia normal tem
+        data = config.get_settings().data_dir / "series" / "wn" / "ep01"
+        start = Image.open(data / "frames" / "scene000_v1_inicio.png").convert("RGB")
+        badge = (930, 245, 1015, 295)
+        assert _red(start.crop(badge)) < 0.05
+        assert _red(Image.open(data / "scenes" / "scene001_v1.png").convert("RGB").crop(badge)) > 0.3
+
         job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/export",
                                            json={"allow_unapproved": True}).json()["job_id"], timeout=600)
         assert job["status"] == "succeeded", (job["error"], job["result"].get("traceback"))
         assert job["result"]["video_clips"] == 1
-        out = client.get(f"/api/episodes/{ep['id']}").json()["output_path"]
-        info = compositor.probe(__import__("pathlib").Path(out))
+        out = Path(client.get(f"/api/episodes/{ep['id']}").json()["output_path"])
+        info = compositor.probe(out)
         mid = (scene0["start"] + scene0["end"]) / 2
-        px = _frame(__import__("pathlib").Path(out), mid, (info.width, info.height))
-        assert px[2] > 150 > px[0]                    # o clipe azul aparece no meio da cena 0
+        frame = _image(out, mid, (info.width, info.height))
+        center = np.asarray(frame.crop((300, 700, 780, 1200))).reshape(-1, 3).mean(axis=0)
+        assert center[2] > 150 > center[0]             # o clipe azul é o fundo da cena 0...
+        assert _red(frame.crop(badge)) > 0.3           # ...e o selo do motor continua por cima dele
+
+
+def _image(path, t, size):
+    w, h = size
+    raw = subprocess.run([motor.ffmpeg_exe(), "-loglevel", "error", "-ss", str(t), "-i", str(path), "-frames:v", "1",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    return Image.fromarray(np.frombuffer(raw, np.uint8).reshape(h, w, 3))
+
+
+def _red(im):
+    a = np.asarray(im).astype(int)
+    return float(((a[..., 0] > 110) & (a[..., 0] > a[..., 1] + 50) & (a[..., 0] > a[..., 2] + 40)).mean())
+
+
+def test_generated_scene_frame_uses_anchor(fake_registry, monkeypatch):
+    monkeypatch.setenv("LOFI_COMFYUI_WEBSOCKET", "false")
+    config.get_settings.cache_clear()
+    fake = fake_registry.add_fake("gpu", FakeComfy(checkpoints=["sd_xl_base_1.0.safetensors"], image_bytes=figure_png(),
+                                                   video_bytes=b"not-a-real-video"))
+    monkeypatch.setattr(registry, "_registry", fake_registry)
+    with TestClient(app) as client:
+        sid = client.post("/api/series", json={"slug": "gs", "title": "GS"}).json()["id"]
+        ch = client.post(f"/api/series/{sid}/characters", json={"slug": "bia", "name": "Bia",
+                                                                 "description": "young woman, ponytail"}).json()
+        client.post(f"/api/characters/{ch['id']}/reference", files={"file": ("b.png", figure_png(), "image/png")})
+        client.post(f"/api/series/{sid}/environments", json={"slug": "cozinha", "name": "cozinha",
+                                                              "description": "cozy kitchen at sunrise"})
+        ep = client.post(f"/api/series/{sid}/episodes", json={
+            "number": 1, "script": "CENA 1 · COZINHA\nBia toma um gole de café."}).json()
+        wait_job(client, client.post(f"/api/episodes/{ep['id']}/generate", json={}).json()["job_id"])
+        job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/video-clips",
+                                           json={"scenes": [0], "start_frame": "generated"}).json()["job_id"])
+        scene = next(g for g in fake.prompts.values() if g.get("7", {}).get("inputs", {}).get(
+            "filename_prefix") == "lofi/scene_full")
+        text = scene["2"]["inputs"]["text"]
+        assert "Setting: cozy kitchen at sunrise" in text and "coffee mug" in text and "young woman" in text
+        assert scene["13"]["class_type"] == "IPAdapterAdvanced" and scene["4"]["inputs"]["height"] == 1344
+        # o vídeo falso é inválido: a cena falha com explicação, sem derrubar a tarefa
+        assert job["status"] == "succeeded" and "0" in job["result"]["errors"]

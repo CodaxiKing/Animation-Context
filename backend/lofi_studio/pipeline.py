@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 from sqlmodel import Session, select
 
-from . import compositor, face, keyframes, motor, story_analysis, style_master, voices
+from . import actions, compositor, face, keyframes, motor, story_analysis, style_master, voices
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -111,6 +111,14 @@ def plan_episode(s: Session, episode: Episode, *, duration: float | None = None)
             shot["scene"] = env.motor_scene
         if chars:
             story_analysis.cast_shot(shot, beat)
+        steps = [] if beat.speaker else actions.steps_for(beat.text)
+        notes = shot.setdefault("director_notes", {})
+        notes["actions"] = [st.public() for st in steps]
+        notes["action_scene"] = actions.is_action_scene(steps)
+        if steps and steps[0].start_pose in keyframes.POSE_PROMPT:
+            doers = [a for a in shot.get("actors", []) if a["char"] in beat.mentioned] or shot.get("actors", [])[:1]
+            for actor in doers:
+                actor["action_pose"] = steps[0].start_pose
         scene = Scene(episode_id=episode.id, index=i, start=shot["start"], end=shot["end"], text=beat.text,
                       environment=env.slug if env else shot["scene"], shot=shot)
         s.add(scene)
@@ -219,16 +227,14 @@ def export_episode_task(ctx: JobContext) -> dict:
                 raise ValueError(f"cenas não aprovadas: {pending}")
             spec_path = write_spec(s, ep)
             series = s.get(Series, ep.series_id)
-            clips = [(series_dir(series) / sc.shot["video_clip"], sc.start, sc.end)
-                     for sc in sorted(scenes, key=lambda x: x.index) if sc.shot.get("video_clip")]
-        ctx.progress(0.1, "renderizando vídeo")
+            missing = [sc.index for sc in scenes if sc.shot.get("video_clip")
+                       and not (series_dir(series) / sc.shot["video_clip"]).is_file()]
+            if missing:
+                raise ValueError(f"clipe de vídeo não encontrado nas cenas {missing}")
+            clips = [sc for sc in scenes if sc.shot.get("video_clip")]
+        # o motor desenha o clipe como fundo do plano e põe legendas, selo, contador e barras por cima
+        ctx.progress(0.1, "renderizando vídeo" + (f" ({len(clips)} cena(s) com clipe)" if clips else ""))
         out = motor.render_video(spec_path)
-        clips = [c for c in clips if c[0].is_file()]
-        if clips:
-            ctx.progress(0.9, f"aplicando {len(clips)} clipe(s) de vídeo")
-            tmp = out.with_name(out.stem + "_clipes.mp4")
-            compositor.splice(out, clips, tmp)
-            tmp.replace(out)
         with session_scope() as s:
             ep = s.get(Episode, ctx.episode_id)
             ep.output_path, ep.status = str(out), EpisodeStatus.done
@@ -630,58 +636,160 @@ def clip_length(seconds: float, fps: int = 24) -> int:
     return max(17, min(MAX_CLIP_FRAMES, 4 * n + 1))
 
 
-def clip_prompt(preset, scene: Scene, extra: str = "") -> str:
+MAX_CLIP_SECONDS = MAX_CLIP_FRAMES / 24
+LIFE_MOTION = "subtle natural motion, breathing, small head movement, hair and clothes moving slightly"
+
+
+def clip_plan(scene: Scene, seconds: float | None = None, max_segments: int = 6) -> list[dict]:
+    """Segmentos de vídeo da cena: um por passo de ação, divididos em pedaços de até ~5 s."""
     notes = scene.shot.get("director_notes", {})
-    motion = []
-    if any(a.get("run") for a in scene.shot.get("actors", [])):
-        motion.append("the character runs")
-    elif any(a.get("walk") for a in scene.shot.get("actors", [])):
-        motion.append("the character walks")
-    if notes.get("speaker"):
-        motion.append("the character speaks with small natural head movement")
-    motion.append("subtle natural motion, breathing, hair and clothes moving slightly, slow cinematic camera")
-    return (f"{preset.short_prompt}. {scene.text}. " + ", ".join(motion) + (f". {extra}" if extra else "")
+    steps = notes.get("actions") or []
+    if not steps:
+        motion = ("the character speaks, with small natural head and hand movements" if notes.get("speaker")
+                  else LIFE_MOTION)
+        steps = [{"motion": motion, "seconds": 3.0}]
+    total = seconds or max(1.0, scene.end - scene.start)
+    weight = sum(s["seconds"] for s in steps)
+    segments = []
+    for st in steps:
+        dur = total * st["seconds"] / weight
+        pieces = max(1, int(-(-dur // MAX_CLIP_SECONDS)))       # teto
+        for k in range(pieces):
+            motion = st["motion"] if k == 0 else f"continues: {st['motion']}"
+            segments.append({"motion": motion, "seconds": round(dur / pieces, 3)})
+    return segments[:max_segments]
+
+
+def clip_prompt(preset, scene: Scene, motion: str, extra: str = "") -> str:
+    return (f"{preset.short_prompt}. {scene.text}. Motion: {motion}, {LIFE_MOTION}, slow cinematic camera"
+            + (f". {extra}" if extra else "")
             + ". Keep the exact same art style, character design and colors as the first frame.")
+
+
+def select_clip_scenes(scenes: list[Scene], mode: str, wanted: list[int] | None) -> list[Scene]:
+    if wanted:
+        keep = set(wanted)
+        return [sc for sc in scenes if sc.index in keep]
+    if mode == "all":
+        return list(scenes)
+    if mode == "action":
+        return [sc for sc in scenes if sc.shot.get("director_notes", {}).get("action_scene")]
+    raise ValueError("informe as cenas ou use mode 'all' / 'action'")
+
+
+def start_frames(s: Session, ep: Episode, scenes: list[Scene], ctx: JobContext) -> dict[int, Path]:
+    """Quadro inicial de cada cena para o vídeo por IA.
+
+    "motor" (padrão): o motor monta a cena no instante em que o clipe começa, SEM legendas, selo, contador,
+    barras ou efeitos de tela (lofi.render --limpo). "generated": a cena desenhada inteira pelo ComfyUI,
+    com o personagem principal dentro do cenário e a cara travada pela âncora (scene_full).
+    """
+    series = s.get(Series, ep.series_id)
+    folder = episode_dir(series, ep) / "frames"
+    folder.mkdir(parents=True, exist_ok=True)
+    if ctx.params.get("start_frame", "motor") == "generated":
+        return {sc.index: generated_scene_frame(s, series, ep, sc, ctx, folder) for sc in scenes}
+    spec_path = write_spec(s, ep)
+    times = [round(sc.start + 0.05, 2) for sc in scenes]
+    frames = motor.render_frames(spec_path, times, clean=True)
+    out = {}
+    for sc, frame in zip(scenes, frames):
+        dest = folder / f"scene{sc.index:03d}_v{sc.version}_inicio.png"
+        shutil.move(str(frame), dest)
+        out[sc.index] = dest
+    return out
+
+
+def generated_scene_frame(s: Session, series: Series, ep: Episode, sc: Scene, ctx: JobContext, folder: Path) -> Path:
+    """Cena inteira gerada (personagem dentro do cenário), identidade do personagem principal pela âncora."""
+    preset = style_master.get(series.style_preset)
+    notes = sc.shot.get("director_notes", {})
+    actors = sc.shot.get("actors", [])
+    lead_slug = notes.get("speaker") or next((a["char"] for a in actors if a.get("action_pose")), None) \
+        or (actors[0]["char"] if actors else None)
+    chars = {c.slug: c for c in s.exec(select(Character).where(Character.series_id == series.id))}
+    env = s.exec(select(Environment).where(Environment.series_id == series.id,
+                                           Environment.slug == (sc.environment or ""))).first()
+    place = (env.description or env.name) if env else (sc.environment or "").replace("_", " ")
+    people = []
+    for a in actors:
+        ch = chars.get(a["char"])
+        if ch:
+            view, emotion, pose = keyframes.actor_pose(a)
+            people.append(f"{ch.description or ch.name}, {keyframes.POSE_PROMPT.get(pose, 'standing')}, "
+                          f"{style_master.EMOTIONS.get(keyframes.EMOTION_EN.get(emotion, 'neutral'), '')}")
+    prompt = (f"{preset.short_prompt}. Vertical cinematic illustration, full scene. Setting: {place}. "
+              + (" Characters: " + " | ".join(people) + "." if people else " No characters.")
+              + f" Story moment: {sc.text}")
+    images = {}
+    if lead_slug and lead_slug in chars and chars[lead_slug].reference_assets:
+        images["reference"] = _anchor_path(s, series, chars[lead_slug])
+        workflow = ctx.params.get("scene_workflow", "scene_full")
+    else:
+        workflow = ctx.params.get("scene_workflow_no_ref", "environment")
+    assets = _run_comfy(ctx, workflow, {"prompt": prompt, "negative": preset.negative + ", text, watermark"},
+                        series_dir(series) / "assets" / "raw", "scene_frame", series.id,
+                        [f"ep{ep.number:02d}", f"scene{sc.index}"], images=images or None)
+    dest = folder / f"scene{sc.index:03d}_v{sc.version}_gerada.png"
+    shutil.copy2(assets[0].path, dest)
+    return dest
 
 
 @task("generate_video_clips")
 def generate_video_clips_task(ctx: JobContext) -> dict:
-    """Anima a prévia de cada cena escolhida com o Wan 2.2 e liga o clipe à cena (entra no export)."""
+    """Anima as cenas com Wan 2.2: passos de ação encadeados (último quadro -> próximo clipe)."""
     with session_scope() as s:
         ep = s.get(Episode, ctx.episode_id)
         series = s.get(Series, ep.series_id)
         preset = style_master.get(series.style_preset)
-        wanted = set(ctx.params["scenes"])
-        scenes = [sc for sc in s.exec(select(Scene).where(Scene.episode_id == ep.id).order_by(Scene.index))
-                  if sc.index in wanted]
-        missing_preview = [sc for sc in scenes if not sc.preview_path or not Path(sc.preview_path).is_file()]
-        if missing_preview:
-            render_previews(s, ep, missing_preview)
-        jobs = [(sc.id, sc.index, Path(sc.preview_path), clip_prompt(preset, sc, ctx.params.get("prompt_extra", "")),
-                 min(ctx.params.get("seconds") or (sc.end - sc.start), MAX_CLIP_FRAMES / 24)) for sc in scenes]
+        all_scenes = s.exec(select(Scene).where(Scene.episode_id == ep.id).order_by(Scene.index)).all()
+        scenes = select_clip_scenes(all_scenes, ctx.params.get("mode", "list"), ctx.params.get("scenes"))
+        starts = start_frames(s, ep, scenes, ctx) if scenes else {}
+        work = [(sc.id, sc.index, sc.version, starts[sc.index], sc.text,
+                 [(clip_prompt(preset, sc, seg["motion"], ctx.params.get("prompt_extra", "")), seg["seconds"])
+                  for seg in clip_plan(sc, ctx.params.get("seconds"))]) for sc in scenes]
         clip_dir = episode_dir(series, ep) / "clips"
         series_folder = series_dir(series)
-    made, errors = {}, {}
-    for i, (scene_id, index, image, prompt, seconds) in enumerate(jobs):
-        def progress(p, i=i):
-            frac = p.value / p.max if p.max else 0
-            ctx.progress(0.05 + 0.9 * (i + frac) / len(jobs), f"cena {index}: Wan 2.2 {p.phase}")
-        ctx.progress(0.05 + 0.9 * i / len(jobs), f"cena {index} ({i + 1}/{len(jobs)})")
+        tags = [f"ep{ep.number:02d}"]
+    total = sum(len(w[5]) for w in work) or 1
+    done_segments, made, errors = 0, {}, {}
+    work_dir = series_folder / "assets" / "raw"
+    for scene_id, index, version, preview, text, segments in work:
         try:
-            assets = _run_comfy(ctx, ctx.params.get("workflow", "wan22_i2v"),
-                                {"prompt": prompt, "negative": WAN_NEGATIVE, "length": clip_length(seconds)},
-                                series_folder / "assets" / "raw", "video_clip", series.id,
-                                [f"ep{ep.number:02d}", f"scene{index}"], images={"image": image}, on_progress=progress)
-            video = next((Path(a.path) for a in assets if Path(a.path).suffix.lower() in (".mp4", ".webm", ".mov")),
-                         None)
-            if video is None:
-                raise RuntimeError("o workflow não devolveu um arquivo de vídeo")
+            start_image = preview
+            if ctx.params.get("harmonize"):
+                ctx.progress(0.02 + 0.95 * done_segments / total, f"cena {index}: uniformizando o quadro inicial")
+                assets = _run_comfy(ctx, ctx.params.get("harmonize_workflow", "harmonize"),
+                                    {"prompt": f"{preset.short_prompt}. {text}", "negative": preset.negative},
+                                    work_dir, "harmonized_frame", series.id, tags + [f"scene{index}"],
+                                    images={"image": preview})
+                start_image = Path(assets[0].path)
+            parts = []
+            for k, (prompt, seconds) in enumerate(segments):
+                def progress(p, k=k):
+                    frac = p.value / p.max if p.max else 0
+                    ctx.progress(0.02 + 0.95 * (done_segments + frac) / total,
+                                 f"cena {index}, parte {k + 1}/{len(segments)}: Wan 2.2 {p.phase}")
+                assets = _run_comfy(ctx, ctx.params.get("workflow", "wan22_i2v"),
+                                    {"prompt": prompt, "negative": WAN_NEGATIVE, "length": clip_length(seconds)},
+                                    work_dir, "video_clip", series.id, tags + [f"scene{index}", f"part{k}"],
+                                    images={"image": start_image}, on_progress=progress)
+                video = next((Path(a.path) for a in assets
+                              if Path(a.path).suffix.lower() in (".mp4", ".webm", ".mov")), None)
+                if video is None:
+                    raise RuntimeError("o workflow não devolveu um arquivo de vídeo")
+                parts.append(video)
+                done_segments += 1
+                if k + 1 < len(segments):          # encadeia: o último quadro vira o início do próximo
+                    start_image = compositor.last_frame(video, work_dir / f"{video.stem}_last.png")
             clip_dir.mkdir(parents=True, exist_ok=True)
+            dest = clip_dir / f"scene{index:03d}_v{version}.mp4"
+            compositor.concat(parts, dest)
+            compositor.probe(dest)          # clipe ilegível não entra na cena (quebraria prévia e exportação)
             with session_scope() as s:
                 sc = s.get(Scene, scene_id)
-                dest = clip_dir / f"scene{index:03d}_v{sc.version}{video.suffix}"
-                shutil.copy2(video, dest)
-                sc.shot = {**sc.shot, "video_clip": dest.relative_to(series_folder).as_posix()}
+                sc.shot = {**sc.shot, "video_clip": dest.relative_to(series_folder).as_posix(),
+                           "video_parts": len(parts)}
                 s.add(sc)
                 s.commit()
             made[index] = str(dest)
@@ -689,4 +797,12 @@ def generate_video_clips_task(ctx: JobContext) -> dict:
             raise
         except Exception as e:
             errors[index] = f"{type(e).__name__}: {e}"
-    return {"clips": made, "errors": errors}
+    if made:   # prévias passam a mostrar o clipe (o motor usa o clipe como fundo do plano)
+        with session_scope() as s:
+            ep = s.get(Episode, ctx.episode_id)
+            redo = [sc for sc in s.exec(select(Scene).where(Scene.episode_id == ep.id)) if sc.index in made]
+            try:
+                render_previews(s, ep, redo)
+            except Exception as e:  # a prévia é só para revisão: o clipe já está salvo
+                errors["previews"] = f"{type(e).__name__}: {e}"
+    return {"clips": made, "errors": errors, "segments": done_segments}

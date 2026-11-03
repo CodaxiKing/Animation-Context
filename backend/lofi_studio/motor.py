@@ -104,15 +104,18 @@ def ffmpeg_available() -> bool:
     return ffmpeg_exe() is not None
 
 
-def render_frames(spec_path: Path, times: list[float], timeout: int = 300) -> list[Path]:
-    """Quadros de prévia (`lofi.render --test`); não exige FFmpeg quando o episódio não tem vozes."""
-    args = [sys.executable, "-m", "lofi.render", str(spec_path), "--test", *[f"{t:.3f}" for t in times]]
+def render_frames(spec_path: Path, times: list[float], timeout: int = 300, *, clean: bool = False) -> list[Path]:
+    """Quadros de prévia (`lofi.render --test`); com clean=True, só a cena, sem legendas/selo/HUD
+    (`--limpo`), para servir de quadro inicial do vídeo por IA."""
+    flag = "--limpo" if clean else "--test"
+    args = [sys.executable, "-m", "lofi.render", str(spec_path), flag, *[f"{t:.3f}" for t in times]]
     res = subprocess.run(args, cwd=motor_dir(), env=_env(), capture_output=True, text=True,
                          encoding="utf-8", errors="replace", timeout=timeout)
     if res.returncode != 0:
         raise RuntimeError("render de prévia falhou: " + res.stderr[-1500:])
     base = spec_path.parent
-    return [base / f"_teste_{t:05.1f}.png" for t in times]
+    prefix = "_limpo_" if clean else "_teste_"
+    return [base / f"{prefix}{t:05.1f}.png" for t in times]
 
 
 def render_video(spec_path: Path, jobs: int = 2, timeout: int = 3 * 3600) -> Path:

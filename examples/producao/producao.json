@@ -1,0 +1,43 @@
+{
+  "series": {
+    "slug": "minha-serie",
+    "title": "MINHA SÉRIE",
+    "genre": "sobrevivência",
+    "style_preset": "dark_cinematic_lofi_2d",
+    "synopsis": "Uma família presa em casa no primeiro dia do surto."
+  },
+  "characters": [
+    {
+      "slug": "bia",
+      "name": "Bia",
+      "description": "Bia, 30-year-old woman, brown hair in a low ponytail, navy zip jacket over a white t-shirt, dark blue jeans, white sneakers.",
+      "reference": "refs/bia.png",
+      "voice_sample": "vozes/bia.wav",
+      "voice": {"exaggeration": 0.5, "seed": 7}
+    },
+    {
+      "slug": "marcos",
+      "name": "Marcos",
+      "description": "Marcos, 55-year-old man, short gray hair, round glasses, brown plaid flannel shirt, khaki pants, brown boots.",
+      "reference": "refs/marcos.png",
+      "voice_sample": "vozes/marcos.wav"
+    },
+    {
+      "slug": "narrador",
+      "name": "Narrador",
+      "voice_sample": "vozes/narrador.wav"
+    }
+  ],
+  "environments": [
+    {"slug": "cozinha", "name": "cozinha", "description": "cozy family kitchen at sunrise, wooden table, pantry shelves, fridge", "motor_scene": "apartamento"},
+    {"slug": "rua", "name": "rua", "description": "quiet gated-community street at dawn, houses with tiled roofs", "motor_scene": "rua"}
+  ],
+  "episode": {"number": 1, "title": "Sábado", "script_file": "ep01.txt"},
+  "steps": {
+    "clips": "action",
+    "harmonize": false,
+    "voices": true,
+    "character_sheets": false,
+    "allow_unapproved": true
+  }
+}

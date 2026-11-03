@@ -103,8 +103,13 @@ POST /api/episodes/{id}/video-clips  {"scenes": [0, 4], "seconds": 3, "seed": 7}
 - **Partida e prompt.** O clipe parte da prévia da cena, então o personagem começa idêntico ao da biblioteca.
   O prompt reúne o estilo, o texto da linha e o movimento (correr, andar, falar). Use `prompt_extra` para pedir algo
   específico, como "lightning flashes", "the camera slowly pushes in".
-- **Na exportação**, o clipe entra por cima do render do motor, exatamente no tempo da cena, e o áudio (vozes,
-  efeitos, trilha) é mantido. Se o clipe for mais curto que a cena, o último quadro fica parado até o fim.
+- **Na exportação**, o motor usa o clipe como fundo do plano e desenha legendas, selo, contador e barras por cima,
+  mantendo o áudio. O quadro que vai para o Wan é limpo, sem esses elementos. Se o clipe for mais curto que a cena,
+  o último quadro fica parado até o fim.
+- **`start_frame: "generated"`** usa o workflow [`scene_full.json`](../workflows/scene_full.json): a cena desenhada
+  inteira, com o personagem principal (quem fala ou quem age) com a cara travada pela âncora. Os outros personagens
+  vêm só da descrição, então a identidade deles é menos firme. Para cenas com várias pessoas, prefira o modo
+  `motor`.
 - **Erros de nós.** Os nomes dos nós (`Wan22ImageToVideoLatent`, `CreateVideo`, `SaveVideo`) seguem o exemplo
   oficial do ComfyUI. Se a sua versão recusar algum, a checagem de dependências mostra qual. Atualize o ComfyUI.
 

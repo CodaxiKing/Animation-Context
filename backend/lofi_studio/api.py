@@ -55,6 +55,13 @@ def health():
             "ffmpeg": motor.ffmpeg_available()}
 
 
+@api.get("/preflight")
+def preflight_report(comfy: bool = True, voice: bool = True):
+    """O que a máquina tem e o que falta para produzir (ComfyUI, modelos, FFmpeg, Chatterbox, disco)."""
+    from . import preflight
+    return preflight.run(check_comfy=comfy, check_voice=voice)
+
+
 @api.get("/engines")
 def list_engines():
     return engines.catalog()
@@ -415,20 +422,28 @@ def generate_voices(episode_id: int, body: VoicesIn, s: Session = SessionDep):
 
 
 class VideoClipsIn(BaseModel):
-    scenes: list[int] = Field(min_length=1, max_length=40)   # índices das cenas a animar
-    seconds: float | None = Field(default=None, gt=0.5, le=5.0)
+    scenes: list[int] | None = Field(default=None, max_length=200)   # índices das cenas a animar
+    mode: str = Field(default="list", pattern="^(list|all|action)$")  # all: episódio inteiro; action: só ação
+    seconds: float | None = Field(default=None, gt=0.5, le=30.0)      # duração total por cena (encadeia >5 s)
+    harmonize: bool = False          # passada leve de img2img no quadro inicial (luz do cenário no personagem)
+    start_frame: str = Field(default="motor", pattern="^(motor|generated)$")   # generated: cena desenhada inteira
     seed: int | None = None
     instance: str | None = None
     prompt_extra: str = Field(default="", max_length=400)
     workflow: str = Field(default="wan22_i2v", pattern=SLUG)
+    harmonize_workflow: str = Field(default="harmonize", pattern=SLUG)
 
 
 @api.post("/episodes/{episode_id}/video-clips", status_code=202)
 def generate_video_clips(episode_id: int, body: VideoClipsIn, s: Session = SessionDep):
-    """Anima cenas escolhidas com Wan 2.2 (image-to-video) a partir da prévia; o clipe entra no export."""
+    """Anima cenas com Wan 2.2 a partir da prévia; ações em sequência viram clipes encadeados."""
     ep = _get(s, Episode, episode_id)
+    if body.mode == "list" and not body.scenes:
+        raise HTTPException(422, "informe scenes ou use mode 'all' / 'action'")
     have = {sc.index for sc in s.exec(select(Scene).where(Scene.episode_id == ep.id))}
-    unknown = sorted(set(body.scenes) - have)
+    if not have:
+        raise HTTPException(409, "gere o episódio (planejamento das cenas) antes dos clipes")
+    unknown = sorted(set(body.scenes or []) - have)
     if unknown:
         raise HTTPException(422, f"cenas inexistentes: {unknown}")
     return {"job_id": get_queue().submit("generate_video_clips", body.model_dump(exclude_none=True),

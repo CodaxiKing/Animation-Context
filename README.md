@@ -4,6 +4,10 @@ Camada de produção sobre o [motor-lofi](https://github.com/CodaxiKing/motor-lo
 orquestração do ComfyUI e identidade visual (STYLE_MASTER). O motor entra como **submódulo** em `external/motor-lofi`
 e é usado como está: nada dele foi copiado ou reescrito, e as séries antigas continuam renderizando do mesmo jeito.
 
+**Máquina de produção (GPU):** guia completo em [docs/INSTALACAO_PRODUCAO.md](docs/INSTALACAO_PRODUCAO.md). Checagem com
+`python -m lofi_studio.preflight` e episódio inteiro com `python -m lofi_studio.produzir producao.json`, como no
+exemplo em [examples/producao/](examples/producao/).
+
 ## Instalar
 
 ```bash

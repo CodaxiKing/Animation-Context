@@ -25,7 +25,10 @@ POSE_PROMPT = {"em_pe": "standing, full body", "andando": "walking, full body, m
                "correndo": "running, full body in motion", "agachado": "crouching and hiding, full body",
                "sentado": "sitting, full body", "apontando": "pointing with the arm extended, full body",
                "segurando": "holding an object in the hands, full body",
-               "celular": "talking on a smartphone, full body"}
+               "celular": "holding a smartphone and looking at the screen, full body",
+               "segurando_caneca": "standing, holding a coffee mug at chest height with both hands, full body",
+               "pedalando": "riding a bicycle toward the camera, full body",
+               "dirigindo": "sitting in the driver's seat of a car, hands on the steering wheel"}
 POSE_FROM_RIG = {"run": "correndo", "walk": "andando", "hide": "agachado", "sit": "sentado",
                  "point": "apontando", "hold": "segurando", "phone": "celular"}
 POSITIONS = {1: ["centro"], 2: ["esq", "dir"], 3: ["esq", "centro", "dir"]}
@@ -40,7 +43,9 @@ def _clean(text: str) -> str:
 def actor_pose(actor: dict) -> tuple[str, str, str]:
     view = VIEW_PT.get(actor.get("view", "front"), "frente")
     emotion = EMOTION_PT.get(actor.get("emotion", "neutral"), "neutro")
-    if actor.get("run"):
+    if actor.get("action_pose"):
+        pose = actor["action_pose"]        # vinda da ação da linha (actions.py)
+    elif actor.get("run"):
         pose = "correndo"
     elif actor.get("walk"):
         pose = "andando"
