@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from . import keyframes, motor, style_master
+from . import keyframes, motor, story_analysis, style_master
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -76,38 +76,41 @@ def import_motor_series(s: Session, slug: str) -> Series:
 
 
 # --- planejamento -------------------------------------------------------------------
-def _match_environment(text: str, envs: list[Environment]) -> Environment | None:
-    low = text.lower()
-    for env in envs:
-        for term in {env.slug.replace("_", " "), env.name.lower()}:
-            if term and re.search(r"\b" + re.escape(term) + r"\b", low):
-                return env
-    return None
-
-
 def plan_episode(s: Session, episode: Episode, *, duration: float | None = None) -> list[Scene]:
+    """Roteiro -> beats (quem fala, quem está em cena, onde) -> planos do motor -> cenas revisáveis."""
     series = s.get(Series, episode.series_id)
     chars = s.exec(select(Character).where(Character.series_id == series.id)).all()
     envs = s.exec(select(Environment).where(Environment.series_id == series.id)).all()
     preset = style_master.get(series.style_preset)
-    actor = chars[0].slug if chars else "roberta"
-    start_env = next((e for e in envs if e.motor_scene), None)
+    env_by_slug = {e.slug: e for e in envs}
 
+    beats = story_analysis.analyze(
+        episode.script, [{"slug": c.slug, "name": c.name} for c in chars],
+        [{"slug": e.slug, "name": e.name} for e in envs])
+    if not beats:
+        raise ValueError("roteiro sem linhas de ação ou fala")
+    first_env = next((env_by_slug[b.environment] for b in beats
+                      if b.environment and env_by_slug[b.environment].motor_scene), None)
+    first_env = first_env or next((e for e in envs if e.motor_scene), None)
     spec = motor.lofi("autodirect").compile_story(
-        episode.script, title=series.title, episode=episode.number, actor=actor,
-        scene=start_env.motor_scene if start_env else "apartamento",
+        story_analysis.compiler_text(beats), title=series.title, episode=episode.number,
+        actor=chars[0].slug if chars else "roberta",
+        scene=first_env.motor_scene if first_env else "apartamento",
         visual_profile=preset.motor_profile, duration=duration)
+    if len(spec["shots"]) != len(beats):
+        raise RuntimeError(f"compilador gerou {len(spec['shots'])} planos para {len(beats)} linhas")
     spec["episode_title"] = episode.title or spec["episode_title"]
 
     for old in s.exec(select(Scene).where(Scene.episode_id == episode.id)).all():
         s.delete(old)
     scenes = []
-    for i, shot in enumerate(spec["shots"]):
-        text = shot.get("director_notes", {}).get("text", "")
-        env = _match_environment(text, envs)
+    for i, (shot, beat) in enumerate(zip(spec["shots"], beats)):
+        env = env_by_slug.get(beat.environment) if beat.environment else None
         if env and env.motor_scene:
             shot["scene"] = env.motor_scene
-        scene = Scene(episode_id=episode.id, index=i, start=shot["start"], end=shot["end"], text=text,
+        if chars:
+            story_analysis.cast_shot(shot, beat)
+        scene = Scene(episode_id=episode.id, index=i, start=shot["start"], end=shot["end"], text=beat.text,
                       environment=env.slug if env else shot["scene"], shot=shot)
         s.add(scene)
         scenes.append(scene)

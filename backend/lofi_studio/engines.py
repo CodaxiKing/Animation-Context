@@ -19,14 +19,16 @@ class EngineInfo:
 
 
 ENGINES = [
-    EngineInfo("story_analysis", "Story Analysis Engine", "ready", "motor-lofi: autodirect + director",
-               "Roteiro → planos com duração, enquadramento, emoção e pose."),
+    EngineInfo("story_analysis", "Story Analysis Engine", "ready", "V5: story_analysis + motor-lofi: autodirect",
+               "Roteiro → quem fala, quem está em cena, entradas/saídas e cenário; o motor decide duração, "
+               "enquadramento, emoção e pose de cada linha."),
     EngineInfo("character_identity", "Character Identity Engine", "ready", "V5: fichas travadas + STYLE_MASTER",
                "Ficha travada por personagem, importada do motor ou cadastrada; prompts sempre com o estilo mestre."),
     EngineInfo("character_assets", "Character Asset Generator", "ready", "ComfyUI: workflow character_sheet",
                "Folha de referência do personagem; requer instância ComfyUI e o workflow instalado."),
     EngineInfo("scene_planning", "Scene Planning Engine", "ready", "V5 + motor-lofi",
-               "Planos viram cenas revisáveis; cenário escolhido pelo texto ou pelo cadastro."),
+               "Planos viram cenas revisáveis com elenco de até 3, lados estáveis na tela, 3/4 frente a frente "
+               "e câmera em quem fala (close ou plano médio)."),
     EngineInfo("environment_generator", "Environment Generator", "ready", "ComfyUI: workflow environment",
                "Arte de fundo do cenário no estilo da série."),
     EngineInfo("image_generation", "Image Generation Engine", "ready", "ComfyUI: character_pose (SDXL + IPAdapter)",

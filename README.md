@@ -30,6 +30,21 @@ cd backend && ../.venv/Scripts/python -m pytest -q
 
 Os testes usam um ComfyUI falso (sem GPU) e o renderizador real do motor para as prévias.
 
+## Formato do roteiro
+
+```
+CENA 1 · CORREDOR                  cabeçalho: nova cena (CENA, ##, INT., EXT.)
+A luz pisca no corredor.           narração: um plano por linha
+João abre a porta e vê Bia.        quem é citado entra em cena
+BIA (com medo): Fecha isso!        fala, com emoção opcional entre parênteses
+João: Calma.                       também aceita "João — Calma."
+Bia sai correndo.                  saída: Bia deixa a cena depois desta linha
+```
+
+Os nomes são reconhecidos pelo nome cadastrado, pelo primeiro nome ou pelo slug, sem diferenciar maiúsculas
+e acentos. Em diálogo, todos que estão na cena aparecem, cada um sempre do mesmo lado da tela, e a câmera
+vai para quem fala.
+
 ## Fluxo
 
 1. `POST /api/series`: cria a série com o preset de estilo. Alternativa: `POST /api/motor/series/{slug}/import` traz uma série que já existe no motor.

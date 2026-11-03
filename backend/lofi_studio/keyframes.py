@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 # vocabulário do motor (rig) -> nomes do lofi/imagens.py
-VIEW_PT = {"front": "frente", "3/4": "34", "three_quarter": "34", "side": "lado", "back": "costas"}
+VIEW_PT = {"front": "frente", "3q": "34", "3/4": "34", "three_quarter": "34", "side": "lado", "back": "costas"}
 EMOTION_PT = {"neutral": "neutro", "fear": "medo", "shock": "choque", "angry": "raiva", "sad": "triste",
               "determined": "determinado", "happy": "feliz", "suspicious": "desconfiado", "crying": "choro",
               "tired": "cansado"}
@@ -68,10 +68,19 @@ def scene_images(shot: dict, environment: str | None) -> dict:
                   "fala": actor["char"]}
         if pose in ("andando", "correndo"):
             person["andar"] = ["esq", "dir"] if pos != "dir" else ["centro", "dir"]
+        if actor.get("facing", 1) < 0:
+            person["espelhar"] = True    # a pose 3/4 é gerada virada para a direita
         people.append(person)
-    zoom = (shot.get("camera") or {}).get("zoom", 1.0)
-    zoom = zoom[-1] if isinstance(zoom, list) else zoom
-    cfg = {"personagens": people, "plano": "close" if zoom >= 1.25 else "medio" if zoom >= 1.1 else "aberto"}
+    camera = shot.get("camera") or {}
+    if "close" in camera:
+        cfg = {"personagens": people, "plano": "close", "alvo": camera["close"]}
+    elif camera.get("plano") in ("medio", "conjunto"):
+        cfg = {"personagens": people, "plano": "medio" if camera["plano"] == "medio" else "aberto",
+               "alvo": camera.get("alvo", 0)}
+    else:
+        zoom = camera.get("zoom", 1.0)
+        zoom = zoom[-1] if isinstance(zoom, list) else zoom
+        cfg = {"personagens": people, "plano": "close" if zoom >= 1.25 else "medio" if zoom >= 1.1 else "aberto"}
     if environment:
         cfg["fundo"] = background_name(environment)
     return cfg

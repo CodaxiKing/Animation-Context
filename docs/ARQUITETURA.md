@@ -10,6 +10,7 @@ Animation-Context/
 │   ├── motor.py             ponte com o motor-lofi (import de lofi.* e lofi.render em subprocesso)
 │   ├── style_master.py      presets de estilo e montagem de prompts
 │   ├── pipeline.py          tarefas de produção (episódio, cena, imagens-chave, export, arte de personagem/cenário)
+│   ├── story_analysis.py    roteiro -> beats: quem fala, quem está em cena, saídas, cenário; elenco no plano
 │   ├── keyframes.py         cena -> fundo + poses no padrão de nomes do lofi/imagens.py; âncora do IPAdapter
 │   ├── jobs.py              fila persistida no banco (backend local com threads)
 │   ├── engines.py           catálogo dos serviços e de quem executa cada um
@@ -46,6 +47,12 @@ Animation-Context/
   trocar por Celery + Redis não muda a API. O backend Celery **ainda não foi implementado**. Tarefas que estavam
   rodando quando o servidor caiu viram `failed` e podem ser repetidas.
 
+- **Análise do roteiro antes do compilador do motor.** O `lofi.autodirect` põe um único ator por plano. O V5
+  identifica falas, rubricas de emoção, quem é citado, quem entra e sai e as quebras de cena. Depois troca o
+  ator único pelo elenco certo, sem alterar o motor:
+  - até 3 por plano, com lados estáveis na tela (regra dos 180°);
+  - 3/4 frente a frente;
+  - `camera.close` ou `camera.alvo` em quem fala.
 - **Imagens-chave, não vídeo gerado.** A IA gera o fundo de cada cenário e as poses de cada personagem, com a
   identidade travada por uma imagem âncora no IPAdapter. O motor anima a composição no modo "imagens": câmera,
   paralaxe, respiração, piscar e quem fala se mexendo. As imagens ficam na biblioteca da série e são

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 
 from . import motor
 
-VIEWS = {"front": "front view", "three_quarter": "three-quarter view", "side": "side profile view",
+VIEWS = {"front": "front view", "three_quarter": "three-quarter view facing right", "side": "side profile view",
          "back": "back view"}
 EMOTIONS = {"neutral": "neutral expression", "fear": "fearful expression, wide eyes",
             "shock": "shocked expression, mouth open", "angry": "angry expression, furrowed eyebrows",
