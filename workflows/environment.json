@@ -1,0 +1,17 @@
+{
+  "_lofi": {
+    "kind": "image",
+    "description": "Cenário de fundo sem personagens (SDXL txt2img, vertical 9:16). Troque o checkpoint pelo que você tiver instalado.",
+    "required": ["prompt", "negative"],
+    "defaults": {"width": 768, "height": 1344, "steps": 28, "cfg": 5.5, "ckpt": "sd_xl_base_1.0.safetensors"}
+  },
+  "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "$ckpt"}},
+  "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "$prompt", "clip": ["1", 1]}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "$negative", "clip": ["1", 1]}},
+  "4": {"class_type": "EmptyLatentImage", "inputs": {"width": "$width", "height": "$height", "batch_size": 1}},
+  "5": {"class_type": "KSampler", "inputs": {
+    "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["4", 0],
+    "seed": "$seed", "steps": "$steps", "cfg": "$cfg", "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
+  "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+  "7": {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "lofi/environment"}}
+}

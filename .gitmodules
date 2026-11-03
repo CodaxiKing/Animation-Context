@@ -1,0 +1,3 @@
+[submodule "external/motor-lofi"]
+	path = external/motor-lofi
+	url = https://github.com/CodaxiKing/motor-lofi.git
