@@ -50,6 +50,11 @@ Os testes usam um ComfyUI falso (sem GPU) e o renderizador real do motor para as
 
 ## Formato do roteiro
 
+Diretivas de interface (valem para a próxima linha; ative a interface na aba "Estilo e interface" da série):
+`[ALERTA] título | texto` · `[NOTIFICACAO] app | título | texto` · `[CARTELA] Sábado | 07:00` · `[HORA] 07:00` ·
+`[STATUS] CEL 20% ; ÁGUA 50% MEIA` · `[MISSAO] título | prazo` · `[TENSAO]` · `[GLITCH]` · `[SEM INTERFACE]`.
+Pronomes: "Ela anda até a mesa" vai para a última personagem citada com pronome "ela" (cadastrado no elenco).
+
 ```
 CENA 1 · CORREDOR                  cabeçalho: nova cena (CENA, ##, INT., EXT.)
 A luz pisca no corredor.           narração: um plano por linha

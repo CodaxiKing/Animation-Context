@@ -53,14 +53,62 @@ def _dark_cinematic() -> StylePreset:
     )
 
 
+COZY_MASTER = """MASTER CHARACTER STYLE — MANDATORY
+
+All characters must follow the exact same visual identity:
+
+ART STYLE:
+- Cozy slice-of-life 2D illustration with a subtle survival-drama tension.
+- Clean digital line art with soft, even dark-brown outlines.
+- Soft cel shading with gentle gradients; warm morning or golden-hour light.
+- Detailed, lived-in environments: kitchens, pantries, gated-community streets, suburban houses.
+- Pleasant, natural color palette with warm wood, beige, sky blue and soft greens; never neon.
+
+HEAD AND FACE — CRITICAL:
+- Perfectly round, smooth cartoon head.
+- Soft off-white face with very light warm-gray shading.
+- Small black oval eyes, simple expressive black eyebrows, small simple mouth.
+- No realistic nose, ears or human facial anatomy.
+- Same head shape and face color for every character in the series.
+
+BODY:
+- Visible skin uses the same soft off-white tone as the face.
+- Natural adult proportions (about 6.5-7 heads tall); children 5-5.5 heads tall. No chibi.
+- Realistic everyday clothing with folds and textures.
+
+CHARACTER CONSISTENCY:
+- Identical head shape, face color and line style for every character.
+- Preserve each character's established hair, clothing and accessories across scenes."""
+
+
+def _cozy_daylight() -> StylePreset:
+    neg = ("realistic skin tones, human facial anatomy, realistic nose, photorealistic, 3D render, anime, chibi, "
+           "oversized head, neon colors, harsh contrast, horror gore, dark muddy colors, inconsistent character design")
+    return StylePreset(
+        id="cozy_daylight_2d",
+        name="Cozy Daylight 2D",
+        description="Ilustração 2D clara e acolhedora (luz da manhã, cenários detalhados) para sobrevivência com "
+                    "tensão no cotidiano.",
+        master_prompt=COZY_MASTER,
+        short_prompt=("Cozy slice-of-life 2D illustration, clean digital line art with soft dark-brown outlines, soft cel "
+                      "shading, warm morning light, detailed lived-in environment, pleasant natural palette. Perfectly "
+                      "round off-white cartoon heads, small black oval eyes, simple eyebrows, small mouth, no nose"),
+        negative=neg,
+        motor_profile="cinematic_cartoon",
+        traits=("clean digital line art", "soft cel shading", "warm daylight", "detailed environments",
+                "round off-white heads", "minimal black eyes", "natural adult proportions"),
+        palette=("#f4efe6", "#d9c7a8", "#a8835a", "#6f8fb5", "#9bb98a", "#3b3a3f", "#c9524a"),
+        generation={"width": 832, "height": 1216, "steps": 28, "cfg": 6.0},
+    )
+
+
 _PRESETS: dict[str, StylePreset] | None = None
 
 
 def presets() -> dict[str, StylePreset]:
     global _PRESETS
     if _PRESETS is None:
-        p = _dark_cinematic()
-        _PRESETS = {p.id: p}
+        _PRESETS = {p.id: p for p in (_dark_cinematic(), _cozy_daylight())}
     return _PRESETS
 
 

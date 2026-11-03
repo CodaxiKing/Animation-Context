@@ -52,6 +52,20 @@ Siga [VOZES.md](VOZES.md) e ponha no `.env`:
 LOFI_CHATTERBOX_PYTHON=C:/tts/.venv/Scripts/python.exe
 ```
 
+## 3b. Opcionais
+
+- **Fila com Celery e Redis** (para várias máquinas ou para a fila sobreviver a um reinício da API):
+  ```
+  LOFI_QUEUE_BACKEND=celery
+  LOFI_REDIS_URL=redis://localhost:6379/0
+  LOFI_DATABASE_URL=postgresql+psycopg://usuario:senha@host:5432/lofi   (necessário com mais de uma máquina)
+  ```
+  Em cada máquina com GPU: `cd backend` e `..\.venv\Scripts\celery -A lofi_studio.celery_app worker --pool=solo`.
+  `--pool=solo` roda uma tarefa por vez, que é o certo para uma GPU.
+- **Segmentação por IA** (poses com fundo detalhado em vez de cinza liso): `..\.venv\Scripts\pip install rembg`.
+  Instalar é a autorização: na primeira vez, o rembg baixa o modelo u2net (~170 MB). Sem ele, essas poses ficam
+  sem recorte e o controle de qualidade avisa.
+
 ## 4. Conferir tudo
 
 Com o ComfyUI aberto:
@@ -112,6 +126,24 @@ leva de 1 a 2 horas. Deixe rodando à noite.
 
 Um clipe que sai corrompido (o Wan falhou no meio) não entra na cena. O erro aparece em `errors` e a cena continua
 com a imagem animada pelo motor.
+
+## Painel
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Abra http://127.0.0.1:8000/ com a API rodando (`.venv\Scripts\uvicorn lofi_studio.api:app --app-dir backend`).
+
+Fluxo no painel:
+1. Crie a série (ou importe do motor).
+2. Em **Elenco**, envie a referência, a voz e o pronome de cada personagem.
+3. Em **Estilo e interface**, escolha o estilo (escuro ou claro) e ligue a interface de sobrevivência e a caixa
+   de diálogo.
+4. Escreva o roteiro e rode as etapas 1 a 5.
+5. Em **Qualidade das imagens**, confira as poses e aprove ou corrija cena a cena antes de exportar.
 
 ## Escrevendo o roteiro para animar bem
 

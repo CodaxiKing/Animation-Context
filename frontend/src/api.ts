@@ -1,9 +1,15 @@
 // Cliente tipado da API do estúdio (backend/lofi_studio/api.py).
 
+export type StatusItem = { rotulo: string; valor: number; texto?: string | null };
+export type SeriesInterface = {
+  status?: StatusItem[]; relogio?: { dia?: string; inicio?: string; seg_por_min?: number };
+  missao?: { titulo: string; prazo?: string } | null; dialogo?: boolean; efeitos?: boolean;
+};
 export type Series = {
   id: number; slug: string; title: string; genre: string; style_preset: string;
-  synopsis: string; motor_slug: string | null; created_at: string;
+  synopsis: string; motor_slug: string | null; created_at: string; interface: SeriesInterface;
 };
+export type QcCheck = { image: string; ok: boolean; score: number | null; flags: string[] };
 export type Character = {
   id: number; series_id: number; slug: string; name: string; description: string;
   rig: Record<string, unknown>; locked: boolean; reference_assets: number[];
@@ -95,6 +101,7 @@ export const api = {
 
   series: () => get<Series[]>("/api/series"),
   createSeries: (b: Partial<Series>) => post<Series>("/api/series", b),
+  updateSeries: (id: number, b: Partial<Series>) => patch<Series>(`/api/series/${id}`, b),
   motorSeries: () => get<string[]>("/api/motor/series"),
   importSeries: (slug: string) => post<Series>(`/api/motor/series/${slug}/import`),
   motorScenes: () => get<string[]>("/api/motor/scenes"),
@@ -119,6 +126,7 @@ export const api = {
   scenes: (eid: number) => get<Scene[]>(`/api/episodes/${eid}/scenes`),
   keyframePlan: (eid: number) => get<KeyframePlan>(`/api/episodes/${eid}/keyframes`),
   voicePlan: (eid: number) => get<VoicePlan>(`/api/episodes/${eid}/voices`),
+  qc: (eid: number) => get<{ checks: QcCheck[]; flagged: number }>(`/api/episodes/${eid}/qc`),
 
   generate: (eid: number) => post<JobRef>(`/api/episodes/${eid}/generate`),
   keyframes: (eid: number, b: Record<string, unknown> = {}) => post<JobRef>(`/api/episodes/${eid}/keyframes`, b),

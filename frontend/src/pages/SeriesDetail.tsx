@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { api, assetUrl, Character, Environment } from "../api";
+import { api, assetUrl, Character, Environment, Series, StatusItem } from "../api";
 import { useJob, useLoad } from "../hooks";
 import { ActionButton, Badge, Empty, ErrorNote, FilePick, JobBar } from "../ui";
 
-type Tab = "elenco" | "cenarios" | "episodios";
+type Tab = "elenco" | "cenarios" | "episodios" | "interface";
 
 export function SeriesDetail({ id }: { id: number }) {
   const series = useLoad(async () => (await api.series()).find((s) => s.id === id) ?? null, [id]);
@@ -19,12 +19,13 @@ export function SeriesDetail({ id }: { id: number }) {
         <p className="muted">{s.genre} · estilo {s.style_preset}</p>
       </header>
       <nav className="tabs" role="tablist">
-        {(["episodios", "elenco", "cenarios"] as Tab[]).map((t) => (
+        {(["episodios", "elenco", "cenarios", "interface"] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
-            {{ episodios: "Episódios", elenco: "Elenco", cenarios: "Cenários" }[t]}
+            {{ episodios: "Episódios", elenco: "Elenco", cenarios: "Cenários", interface: "Estilo e interface" }[t]}
           </button>
         ))}
       </nav>
+      {tab === "interface" && <InterfaceForm series={s} onSaved={(x) => series.setData(x)} />}
       {tab === "elenco" && <Cast seriesId={id} />}
       {tab === "cenarios" && <Places seriesId={id} />}
       {tab === "episodios" && <Episodes seriesId={id} />}
@@ -78,6 +79,11 @@ function CharacterCard({ c, onChange }: { c: Character; onChange: (c: Character)
         <h3>{c.name} {c.locked && <span title="ficha travada: o roteiro não muda o visual">🔒</span>}</h3>
         <p className="muted small"><code>{c.slug}</code></p>
         {c.description && <p className="small clamp">{c.description}</p>}
+        <label className="small row">pronome
+          <select value={c.pronoun ?? ""} onChange={async (e) => onChange(await api.updateCharacter(c.id, { pronoun: e.target.value || null }))}>
+            <option value="">—</option><option value="ela">ela</option><option value="ele">ele</option>
+          </select>
+        </label>
         <p className="small">voz: {c.voice?.sample_asset ? <Badge status="ok" label="amostra ok" /> : <Badge status="aviso" label="sem amostra" />}</p>
         <div className="row wrap">
           <FilePick label="Referência" accept="image/*" onFile={async (f) => onChange(await api.uploadReference(c.id, f))} />
@@ -179,5 +185,69 @@ function Episodes({ seriesId }: { seriesId: number }) {
         }}>Criar episódio</ActionButton>
       </section>
     </>
+  );
+}
+
+const statusToText = (items?: StatusItem[]) =>
+  (items ?? []).map((i) => `${i.rotulo} ${Math.round(i.valor * 100)}%${i.texto ? " " + i.texto : ""}`).join("; ");
+
+function textToStatus(text: string): StatusItem[] {
+  return text.split(/[;\n]/).map((part) => part.trim().match(/^(.+?)\s+(\d{1,3})\s*%\s*(.*)$/))
+    .filter((m): m is RegExpMatchArray => m !== null)
+    .map((m) => ({ rotulo: m[1].toUpperCase(), valor: Number(m[2]) / 100, texto: m[3] ? m[3].toUpperCase() : null }));
+}
+
+function InterfaceForm({ series, onSaved }: { series: Series; onSaved: (s: Series) => void }) {
+  const ui = series.interface ?? {};
+  const styles = useLoad(() => api.styles(), []);
+  const [style, setStyle] = useState(series.style_preset);
+  const [enabled, setEnabled] = useState(Boolean(ui.status?.length || ui.relogio || ui.missao));
+  const [status, setStatus] = useState(statusToText(ui.status) || "ÁGUA 100% CHEIA; COMIDA 100% CHEIA; CEL 58%");
+  const [dia, setDia] = useState(ui.relogio?.dia ?? "SÁB");
+  const [inicio, setInicio] = useState(ui.relogio?.inicio ?? "06:20");
+  const [missao, setMissao] = useState(ui.missao?.titulo ?? "");
+  const [prazo, setPrazo] = useState(ui.missao?.prazo ?? "");
+  const [dialogo, setDialogo] = useState(Boolean(ui.dialogo));
+  const [efeitos, setEfeitos] = useState(ui.efeitos !== false);
+  return (
+    <section className="panel">
+      <h2>Estilo visual</h2>
+      <select value={style} onChange={(e) => setStyle(e.target.value)}>
+        {styles.data?.map((st) => <option key={st.id} value={st.id}>{st.name}: {st.description}</option>)}
+      </select>
+      <h2 className="section-title">Interface de sobrevivência</h2>
+      <label className="check"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> mostrar barras, relógio e missão</label>
+      {enabled && (
+        <div className="grid2">
+          <label className="field">Barras (rótulo, %, texto opcional; separe com ;)
+            <input value={status} onChange={(e) => setStatus(e.target.value)} />
+          </label>
+          <label className="field">Missão (título e prazo)
+            <span className="row"><input value={missao} onChange={(e) => setMissao(e.target.value)} placeholder="Sobreviva 72h" />
+              <input value={prazo} onChange={(e) => setPrazo(e.target.value)} placeholder="72:00" size={6} /></span>
+          </label>
+          <label className="field">Relógio (dia e hora inicial)
+            <span className="row"><input value={dia} onChange={(e) => setDia(e.target.value)} size={5} />
+              <input value={inicio} onChange={(e) => setInicio(e.target.value)} size={6} /></span>
+          </label>
+        </div>
+      )}
+      <label className="check"><input type="checkbox" checked={dialogo} onChange={(e) => setDialogo(e.target.checked)} /> falas em caixa de diálogo com retrato (no lugar da legenda)</label><br />
+      <label className="check"><input type="checkbox" checked={efeitos} onChange={(e) => setEfeitos(e.target.checked)} /> efeitos de tensão automáticos (retícula em perigo, glitch em impacto)</label>
+      <p className="muted small">No roteiro: <code>[ALERTA] título | texto</code>, <code>[NOTIFICACAO] app | título | texto</code>,
+        {" "}<code>[CARTELA] Sábado | 07:00</code>, <code>[HORA] 07:00</code>, <code>[STATUS] CEL 20%</code>, <code>[MISSAO] título | prazo</code>,
+        {" "}<code>[TENSAO]</code>, <code>[GLITCH]</code>. Vale ao planejar o episódio de novo.</p>
+      <ActionButton kind="primary" onClick={async () => onSaved(await api.updateSeries(series.id, {
+        style_preset: style,
+        interface: {
+          ...(enabled ? {
+            status: textToStatus(status),
+            relogio: { dia, inicio },
+            ...(missao ? { missao: { titulo: missao, ...(prazo ? { prazo } : {}) } } : {}),
+          } : {}),
+          dialogo, efeitos,
+        },
+      }))}>Salvar</ActionButton>
+    </section>
   );
 }

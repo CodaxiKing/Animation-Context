@@ -99,6 +99,15 @@ class SeriesIn(BaseModel):
     genre: str = "suspense"
     style_preset: str = "dark_cinematic_lofi_2d"
     synopsis: str = ""
+    interface: dict[str, Any] = {}
+
+
+class SeriesPatch(BaseModel):
+    title: str | None = None
+    genre: str | None = None
+    style_preset: str | None = None
+    synopsis: str | None = None
+    interface: dict[str, Any] | None = None
 
 
 @api.get("/series")
@@ -122,6 +131,21 @@ def create_series(body: SeriesIn, s: Session = SessionDep):
 @api.get("/series/{series_id}")
 def get_series(series_id: int, s: Session = SessionDep):
     return _get(s, Series, series_id)
+
+
+@api.patch("/series/{series_id}")
+def update_series(series_id: int, body: SeriesPatch, s: Session = SessionDep):
+    """Edita a série (inclusive estilo e interface de sobrevivência). Vale ao planejar de novo."""
+    series = _get(s, Series, series_id)
+    changes = body.model_dump(exclude_unset=True)
+    if "style_preset" in changes and changes["style_preset"] not in style_master.presets():
+        raise HTTPException(422, f"preset desconhecido: {changes['style_preset']}")
+    for k, v in changes.items():
+        setattr(series, k, v)
+    s.add(series)
+    s.commit()
+    s.refresh(series)
+    return series
 
 
 @api.get("/motor/series")
@@ -148,9 +172,11 @@ class CharacterIn(BaseModel):
     description: str = ""
     rig: dict[str, Any] = {}
     locked: bool = True
+    pronoun: str | None = Field(default=None, pattern="^(ele|ela)$")
 
 
 class CharacterPatch(BaseModel):
+    pronoun: str | None = Field(default=None, pattern="^(ele|ela)$")
     name: str | None = None
     description: str | None = None
     rig: dict[str, Any] | None = None
@@ -387,6 +413,13 @@ def generate_episode(episode_id: int, body: GenerateEpisode, s: Session = Sessio
     _get(s, Episode, episode_id)
     return {"job_id": get_queue().submit("generate_episode", body.model_dump(exclude_none=True),
                                          episode_id=episode_id)}
+
+
+@api.get("/episodes/{episode_id}/qc")
+def episode_qc(episode_id: int, s: Session = SessionDep):
+    """Controle de qualidade visual das poses (rosto, tom de pele, cores vs. âncora, recorte)."""
+    checks = pipeline.visual_qc(s, _get(s, Episode, episode_id))
+    return {"checks": checks, "flagged": sum(1 for c in checks if not c["ok"])}
 
 
 @api.get("/episodes/{episode_id}/keyframes")

@@ -11,10 +11,11 @@ import re
 import shutil
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 from sqlmodel import Session, select
 
-from . import actions, compositor, face, keyframes, motor, story_analysis, style_master, voices
+from . import actions, compositor, face, keyframes, qc_visual, motor, story_analysis, style_master, voices
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -77,6 +78,51 @@ def import_motor_series(s: Session, slug: str) -> Series:
 
 
 # --- planejamento -------------------------------------------------------------------
+DANGER = re.compile(r"zumbi|monstr|sangue|perig|amea[cç]|morr|morte|horda|infectad|persegu|ataca|mordid", re.I)
+IMPACT = re.compile(r"explo|tiro|estrondo|grit|susto|quebra|desab|bate (?:a|na) porta|arromb", re.I)
+
+
+def write_portraits(s: Session, series: Series, chars: list[Character]) -> dict[str, str]:
+    """Retrato de cada personagem (rosto recortado da âncora) para a caixa de diálogo: imagens/ref_<slug>.png."""
+    out = {}
+    for ch in chars:
+        if not ch.reference_assets:
+            continue
+        asset = s.get(Asset, ch.reference_assets[0])
+        if asset is None or not Path(asset.path).is_file():
+            continue
+        dest = images_dir(series) / f"ref_{ch.slug}.png"
+        if not dest.is_file() or dest.stat().st_mtime < Path(asset.path).stat().st_mtime:
+            im = Image.open(asset.path).convert("RGB")
+            head = face.find_head(Path(asset.path))
+            if head:
+                r = head.r * 1.9
+                box = (int(head.cx - r), int(head.cy - r * 0.9), int(head.cx + r), int(head.cy + r * 1.1))
+            else:                                   # sem cabeça detectada: quadrado do topo, centralizado
+                side = min(im.width, im.height // 2)
+                box = ((im.width - side) // 2, 0, (im.width + side) // 2, side)
+            im.crop(box).resize((512, 512), Image.LANCZOS).save(dest)
+        out[ch.slug] = f"{keyframes.IMAGES_DIR}/{dest.name}"
+    return out
+
+
+def apply_interface(shot: dict, beat, steps: list, series: Series, chars: list[Character], portraits: dict) -> None:
+    """Diretivas do roteiro, caixa de diálogo com retrato e efeitos de tensão automáticos."""
+    shot.update(beat.overlays)
+    ui = series.interface or {}
+    if ui.get("dialogo") and beat.speaker and beat.dialogue:
+        name = next((c.name for c in chars if c.slug == beat.speaker), beat.speaker)
+        shot["dialogo"] = {"nome": name.upper(), "texto": beat.dialogue,
+                           **({"retrato": portraits[beat.speaker]} if beat.speaker in portraits else {})}
+        shot["legenda"] = False             # a caixa de diálogo substitui a legenda
+    if ui.get("efeitos", True):
+        text = beat.dialogue or beat.text
+        if "reticula" not in shot and DANGER.search(text) and actions.is_action_scene(steps):
+            shot["reticula"] = 0.7
+        if "glitch" not in shot and IMPACT.search(text):
+            shot["glitch"] = True
+
+
 def plan_episode(s: Session, episode: Episode, *, duration: float | None = None) -> list[Scene]:
     """Roteiro -> beats (quem fala, quem está em cena, onde) -> planos do motor -> cenas revisáveis."""
     series = s.get(Series, episode.series_id)
@@ -86,7 +132,7 @@ def plan_episode(s: Session, episode: Episode, *, duration: float | None = None)
     env_by_slug = {e.slug: e for e in envs}
 
     beats = story_analysis.analyze(
-        episode.script, [{"slug": c.slug, "name": c.name} for c in chars],
+        episode.script, [{"slug": c.slug, "name": c.name, "pronoun": c.pronoun} for c in chars],
         [{"slug": e.slug, "name": e.name} for e in envs])
     if not beats:
         raise ValueError("roteiro sem linhas de ação ou fala")
@@ -101,6 +147,11 @@ def plan_episode(s: Session, episode: Episode, *, duration: float | None = None)
     if len(spec["shots"]) != len(beats):
         raise RuntimeError(f"compilador gerou {len(spec['shots'])} planos para {len(beats)} linhas")
     spec["episode_title"] = episode.title or spec["episode_title"]
+    ui = series.interface or {}
+    hud = {k: ui[k] for k in ("status", "relogio", "missao", "cor") if ui.get(k)}
+    if hud:
+        spec["interface"] = hud
+    portraits = write_portraits(s, series, chars) if ui.get("dialogo") else {}
 
     for old in s.exec(select(Scene).where(Scene.episode_id == episode.id)).all():
         s.delete(old)
@@ -113,6 +164,7 @@ def plan_episode(s: Session, episode: Episode, *, duration: float | None = None)
             story_analysis.cast_shot(shot, beat)
         steps = [] if beat.speaker else actions.steps_for(beat.text)
         notes = shot.setdefault("director_notes", {})
+        apply_interface(shot, beat, steps, series, chars, portraits)
         notes["actions"] = [st.public() for st in steps]
         notes["action_scene"] = actions.is_action_scene(steps)
         if steps and steps[0].start_pose in keyframes.POSE_PROMPT:
@@ -340,8 +392,25 @@ def _anchor_path(s: Session, series: Series, char: Character) -> Path:
     return dest if dest.is_file() else keyframes.anchor_for_ipadapter(Path(asset.path), dest)
 
 
+def remove_background_ai(path: Path) -> bool:
+    """Segmentação por IA (rembg, opcional). Instalar o pacote é a autorização: na 1ª vez ele baixa o modelo
+    u2net (~170 MB). Sem rembg, devolve False e a pose fica como está (o QC avisa)."""
+    try:
+        from rembg import remove
+    except ImportError:
+        return False
+    im = remove(Image.open(path).convert("RGBA"))
+    bb = im.split()[3].point(lambda v: 255 if v > 20 else 0).getbbox()
+    (im.crop(bb) if bb else im).save(path)
+    return True
+
+
 def _import_keyframe(series: Series, raw: Path, name: str, job_id: int) -> Path:
     out = Path(motor.lofi("imagens").importar(str(series_dir(series)), str(raw), name))
+    if not name.startswith(("fundo_", "ref_")):
+        alpha = np.asarray(Image.open(out).convert("RGBA").split()[3])
+        if (alpha > 128).mean() > qc_visual.CUT_MAX:        # fundo não era liso: o recorte simples falhou
+            remove_background_ai(out)
     with session_scope() as s:
         s.add(Asset(series_id=series.id, kind="keyframe", path=str(out), tags=[name], job_id=job_id,
                     meta={"source": str(raw)}))
@@ -414,6 +483,27 @@ def face_variants(ctx: JobContext, series: Series, preset, char: Character, name
         except Exception as e:
             errors[name + sfx] = f"{type(e).__name__}: {e}"
     return made
+
+
+def visual_qc(s: Session, episode: Episode) -> list[dict]:
+    """Confere cada pose de personagem do episódio contra a âncora (qc_visual)."""
+    series = s.get(Series, episode.series_id)
+    plan = keyframe_plan(s, episode)
+    chars = {c.slug: c for c in s.exec(select(Character).where(Character.series_id == series.id))}
+    folder, work = images_dir(series), series_dir(series) / "assets"
+    work.mkdir(parents=True, exist_ok=True)
+    out = []
+    for name, req in sorted(plan["images"].items()):
+        path = folder / f"{name}.png"
+        if req["kind"] != "character" or not path.is_file():
+            continue
+        ch = chars.get(req["char"])
+        anchor_path = None
+        if ch and ch.reference_assets:
+            a = s.get(Asset, ch.reference_assets[0])
+            anchor_path = Path(a.path) if a else None
+        out.append(qc_visual.check_pose(path, anchor_path, req["view"], work).public())
+    return out
 
 
 @task("generate_keyframes")
@@ -495,7 +585,8 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
         if ready:
             render_previews(s, ep, ready)
         ready_idx = [sc.index for sc in ready]
-    return {"generated": generated, "face_variants": variants, "errors": errors, "scenes_ready": ready_idx,
+        qc = [c for c in visual_qc(s, ep) if not c["ok"]]
+    return {"generated": generated, "face_variants": variants, "errors": errors, "scenes_ready": ready_idx, "qc": qc,
             "scenes_blocked": blocked}
 
 

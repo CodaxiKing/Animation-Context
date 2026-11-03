@@ -12,6 +12,18 @@ completa os planos com o elenco certo:
 
 Formatos de fala aceitos: "NOME: fala", "Nome (emoção): fala", "Nome — fala".
 Cabeçalhos de cena: "CENA ...", "## ...", "INT."/"EXT.".
+
+Diretivas de interface (valem para a próxima linha; não viram plano):
+  [ALERTA] Permaneça em casa! | Feche portas e janelas.
+  [NOTIFICACAO] Família | Pai | Mensagem de voz (0:12)
+  [CARTELA] Sábado | 07:00
+  [HORA] 07:00
+  [STATUS] CEL 58% ; ÁGUA 100% CHEIA
+  [MISSAO] Prepare o abrigo | 90:00          ([MISSAO] sozinho esconde a missão)
+  [TENSAO]  moldura de retícula     [GLITCH]  falha de imagem no começo do plano
+  [SEM INTERFACE]  esconde a interface no próximo plano
+Pronomes: "Ele/Ela ..." no começo da narração aponta para o último personagem citado com aquele pronome
+(o pronome de cada personagem é cadastrado; nunca é deduzido do nome).
 """
 import re
 import unicodedata
@@ -49,6 +61,7 @@ def emotion_from_note(note: str | None) -> str | None:
 class Who:
     slug: str
     names: list[str]
+    pronoun: str | None = None
 
     def pattern(self) -> re.Pattern:
         alts = sorted({fold(n) for n in self.names if n}, key=len, reverse=True)
@@ -66,6 +79,50 @@ class Beat:
     cast: list[str] = field(default_factory=list)   # quem aparece, em ordem estável de entrada na cena
     environment: str | None = None
     heading: str | None = None
+    overlays: dict = field(default_factory=dict)    # chaves de plano do motor (alerta, cartela, hora, status...)
+
+
+DIRECTIVE = re.compile(r"^\s*\[\s*([A-Za-zÀ-ÿ ]+?)\s*\]\s*(.*)$")
+PRONOUN_START = re.compile(r"^(ele|ela|eles|elas)\b", re.I)
+
+
+def _status_items(text: str) -> dict:
+    """"CEL 58% ; ÁGUA 100% CHEIA" -> {"CEL": [0.58, None], "ÁGUA": [1.0, "CHEIA"]}"""
+    out = {}
+    for part in re.split(r"[;,]", text):
+        m = re.match(r"\s*(.+?)\s+(\d{1,3})\s*%\s*(.*)$", part)
+        if m:
+            out[m.group(1).strip().upper()] = [int(m.group(2)) / 100, m.group(3).strip().upper() or None]
+    return out
+
+
+def parse_directive(line: str) -> dict | None:
+    """Diretiva de interface -> chaves do plano do motor. None se a linha não for diretiva."""
+    m = DIRECTIVE.match(line)
+    if not m:
+        return None
+    tag = fold(m.group(1)).replace(" ", "")
+    args = [a.strip() for a in m.group(2).split("|")] if m.group(2).strip() else []
+    if tag == "alerta":
+        return {"alerta": {"titulo": args[0] if args else "ALERTA", "texto": args[1] if len(args) > 1 else ""}}
+    if tag in ("notificacao", "mensagem"):
+        a = args + ["", "", ""]
+        return {"notificacao": {"app": a[0] or "MENSAGEM", "titulo": a[1], "texto": a[2]}}
+    if tag == "cartela":
+        return {"cartela": {"titulo": args[0] if args else "", **({"sub": args[1]} if len(args) > 1 else {})}}
+    if tag == "hora" and args and re.match(r"^\d{1,2}:\d{2}$", args[0]):
+        return {"hora": args[0].zfill(5)}
+    if tag == "status" and args:
+        return {"status": _status_items(" ; ".join(args))}
+    if tag == "missao":
+        return {"missao": {"titulo": args[0], **({"prazo": args[1]} if len(args) > 1 else {})} if args else None}
+    if tag == "tensao":
+        return {"reticula": float(args[0]) if args and re.match(r"^[\d.]+$", args[0]) else 0.8}
+    if tag == "glitch":
+        return {"glitch": True}
+    if tag == "seminterface":
+        return {"interface": False}
+    return None
 
 
 def build_index(characters: list[dict]) -> list[Who]:
@@ -74,7 +131,9 @@ def build_index(characters: list[dict]) -> list[Who]:
     for c in characters:
         name = c.get("name") or c["slug"]
         names = [name, c["slug"].replace("_", " "), name.split()[0], *c.get("aliases", [])]
-        index.append(Who(c["slug"], [n for n in names if len(n) >= 2]))
+        who = Who(c["slug"], [n for n in names if len(n) >= 2])
+        who.pronoun = fold(c.get("pronoun") or "") or None     # "ele"/"ela", só se cadastrado
+        index.append(who)
     return index
 
 
@@ -110,10 +169,21 @@ def analyze(script: str, characters: list[dict], environments: list[dict] | None
     environments = environments or []
     beats: list[Beat] = []
     block, present, environment, heading = 0, [], None, None
+    pending: dict = {}
+    recent: list[str] = []      # personagens na ordem em que foram citados por último (para pronomes)
+    pronoun_of = {w.slug: w.pronoun for w in index}
 
     for raw in script.splitlines():
         line = raw.strip()
         if not line:
+            continue
+        directive = parse_directive(line)
+        if directive is not None:
+            for k, v in directive.items():
+                if k == "status" and "status" in pending:
+                    pending["status"].update(v)
+                else:
+                    pending[k] = v
             continue
         if SCENE_HEADING.match(line):
             if beats:
@@ -133,6 +203,14 @@ def analyze(script: str, characters: list[dict], environments: list[dict] | None
             beat.mentioned = [s for s in _mentions(beat.dialogue, index) if s != speaker]
         else:
             beat.mentioned = _mentions(line, index)
+            pm = PRONOUN_START.match(fold(line))
+            if pm and not beat.mentioned:
+                pron = pm.group(1).rstrip("s")
+                target = next((s for s in reversed(recent) if pronoun_of.get(s) == pron and s in present), None)
+                if target:
+                    beat.mentioned = [target]
+        if pending:
+            beat.overlays, pending = pending, {}
 
         # o lugar vem do cabeçalho e da narração; fala cita lugares sem mudar de cena ("ninguém responde no rádio")
         beat.environment = (None if speaker else _environment(line, environments)) or environment
@@ -153,10 +231,16 @@ def analyze(script: str, characters: list[dict], environments: list[dict] | None
         beat.cast = cast[:MAX_CAST]
 
         beats.append(beat)
+        for slug in ([speaker] if speaker else []) + beat.mentioned:
+            if slug in recent:
+                recent.remove(slug)
+            recent.append(slug)
         if not speaker and EXIT.search(fold(line)):
             for slug in beat.mentioned:
                 if slug in present:
                     present.remove(slug)
+    if pending and beats:          # diretivas no fim do roteiro valem para a última linha
+        beats[-1].overlays.update(pending)
     return beats
 
 

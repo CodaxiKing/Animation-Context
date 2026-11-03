@@ -23,6 +23,9 @@ class Series(SQLModel, table=True):
     style_preset: str = "dark_cinematic_lofi_2d"
     synopsis: str = ""
     motor_slug: str | None = None          # série importada de external/motor-lofi/series/<slug>
+    # interface de sobrevivência: {"status": [...], "relogio": {...}, "missao": {...}, "cor": [r,g,b],
+    #   "dialogo": true (caixa de diálogo com retrato no lugar da legenda), "efeitos": true (retícula/glitch automáticos)}
+    interface: dict[str, Any] = json_field()
     created_at: datetime = Field(default_factory=now)
 
 
@@ -35,6 +38,7 @@ class Character(SQLModel, table=True):
     description: str = ""                  # aparência em inglês, usada nos prompts
     rig: dict[str, Any] = json_field()     # ficha travada no formato do motor (top, legs, hair...)
     locked: bool = True                    # ficha travada: o roteiro não redefine o visual
+    pronoun: str | None = None             # "ele"/"ela" para resolver "Ela pega..." (cadastrado, nunca deduzido)
     reference_assets: list[int] = json_field(list)
     # voz: {"provider": "chatterbox", "sample_asset": id, "exaggeration": 0.5, "cfg_weight": 0.5,
     #       "temperature": 0.8, "seed": 7}. O personagem de slug "narrador" narra as linhas sem fala.
@@ -118,6 +122,7 @@ class Job(SQLModel, table=True):
     result: dict[str, Any] = json_field()
     error: str | None = None
     attempts: int = 0
+    cancel_requested: bool | None = None   # pedido de cancelamento (lido também por workers de outro processo)
     parent_id: int | None = Field(default=None, foreign_key="job.id")
     episode_id: int | None = Field(default=None, foreign_key="episode.id")
     scene_id: int | None = Field(default=None, foreign_key="scene.id")

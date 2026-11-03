@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, Episode, Job, previewUrl, Scene, videoUrl } from "../api";
+import { api, Episode, Job, previewUrl, QcCheck, Scene, videoUrl } from "../api";
 import { useJob, useLoad } from "../hooks";
 import { ActionButton, Badge, Empty, ErrorNote, JobBar, KIND_LABEL, seconds } from "../ui";
 
@@ -66,6 +66,8 @@ export function EpisodePage({ id }: { id: number }) {
           </ul>
         </details>
       )}
+
+      <ImageQc episodeId={id} />
 
       <h2 className="section-title">Cenas</h2>
       <ErrorNote error={scenes.error} />
@@ -143,6 +145,7 @@ function JobSummary({ job }: { job: Job }) {
   if (Array.isArray(r.face_variants)) items.push(`${r.face_variants.length} variantes de olhos/boca`);
   if (typeof r.cached === "number") items.push(`${r.generated} falas geradas, ${r.cached} reaproveitadas`);
   if (r.clips && typeof r.clips === "object") items.push(`${Object.keys(r.clips).length} clipes`);
+  if (Array.isArray(r.qc) && r.qc.length) items.push(`${r.qc.length} imagens para revisar (qualidade)`);
   if (typeof r.scenes === "number") items.push(`${r.scenes} cenas`);
   return (
     <div className="summary">
@@ -211,5 +214,26 @@ function SceneCard({ s, checked, onCheck, onChange, onJob }: {
         </div>
       </div>
     </article>
+  );
+}
+
+function ImageQc({ episodeId }: { episodeId: number }) {
+  const [checks, setChecks] = useState<QcCheck[] | null>(null);
+  const flagged = checks?.filter((c) => !c.ok) ?? [];
+  return (
+    <section className="panel">
+      <div className="row between">
+        <h2>Qualidade das imagens {checks && (flagged.length
+          ? <Badge status="aviso" label={`${flagged.length} para revisar`} />
+          : <Badge status="ok" label={`${checks.length} ok`} />)}</h2>
+        <ActionButton onClick={async () => setChecks((await api.qc(episodeId)).checks)}>Conferir</ActionButton>
+      </div>
+      <p className="muted small">Compara cada pose com a referência do personagem: rosto redondo, tom de pele do estilo, cores da roupa e do cabelo, recorte do fundo.</p>
+      {flagged.length > 0 && (
+        <ul className="findings">
+          {flagged.map((c) => <li key={c.image}><code>{c.image}</code>: {c.flags.join("; ")}</li>)}
+        </ul>
+      )}
+    </section>
   );
 }

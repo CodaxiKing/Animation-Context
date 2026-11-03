@@ -16,3 +16,8 @@ imageio-ffmpeg     # FFmpeg embutido, usado quando não há ffmpeg no PATH
 pytest
 # produção opcional:
 # psycopg[binary]   -> LOFI_DATABASE_URL=postgresql+psycopg://...
+# fila opcional (LOFI_QUEUE_BACKEND=celery):
+# celery
+# redis
+# segmentação por IA opcional (baixa o modelo u2net na 1ª vez):
+# rembg
