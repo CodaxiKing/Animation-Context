@@ -8,6 +8,8 @@ export type SeriesInterface = {
 export type Series = {
   id: number; slug: string; title: string; genre: string; style_preset: string;
   synopsis: string; motor_slug: string | null; created_at: string; interface: SeriesInterface;
+  style_reference: number | null;
+  production: { modo?: "ia" | "motor"; qualidade?: "rapida" | "alta"; selo?: boolean };
 };
 export type QcCheck = { image: string; ok: boolean; score: number | null; flags: string[] };
 export type Character = {
@@ -102,6 +104,7 @@ export const api = {
   series: () => get<Series[]>("/api/series"),
   createSeries: (b: Partial<Series>) => post<Series>("/api/series", b),
   updateSeries: (id: number, b: Partial<Series>) => patch<Series>(`/api/series/${id}`, b),
+  uploadStyle: (id: number, f: File) => upload<Series>(`/api/series/${id}/style-reference`, f),
   motorSeries: () => get<string[]>("/api/motor/series"),
   importSeries: (slug: string) => post<Series>(`/api/motor/series/${slug}/import`),
   motorScenes: () => get<string[]>("/api/motor/scenes"),
@@ -129,6 +132,8 @@ export const api = {
   qc: (eid: number) => get<{ checks: QcCheck[]; flagged: number }>(`/api/episodes/${eid}/qc`),
 
   generate: (eid: number) => post<JobRef>(`/api/episodes/${eid}/generate`),
+  produce: (eid: number, b: { clips?: "all" | "action"; quality?: "rapida" | "alta" }) =>
+    post<JobRef>(`/api/episodes/${eid}/produce`, b),
   keyframes: (eid: number, b: Record<string, unknown> = {}) => post<JobRef>(`/api/episodes/${eid}/keyframes`, b),
   voices: (eid: number, b: Record<string, unknown> = {}) => post<JobRef>(`/api/episodes/${eid}/voices`, b),
   clips: (eid: number, b: Record<string, unknown>) => post<JobRef>(`/api/episodes/${eid}/video-clips`, b),

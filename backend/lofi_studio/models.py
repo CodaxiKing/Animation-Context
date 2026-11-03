@@ -26,6 +26,10 @@ class Series(SQLModel, table=True):
     # interface de sobrevivência: {"status": [...], "relogio": {...}, "missao": {...}, "cor": [r,g,b],
     #   "dialogo": true (caixa de diálogo com retrato no lugar da legenda), "efeitos": true (retícula/glitch automáticos)}
     interface: dict[str, Any] = json_field()
+    # imagem que define o estilo de todas as cenas geradas (IPAdapter "style transfer")
+    style_reference: int | None = None     # id do asset (sem chave estrangeira: asset já aponta para a série)
+    # produção: {"modo": "ia" (cena gerada + animada) | "motor", "qualidade": "rapida" | "alta", "selo": false}
+    production: dict[str, Any] = json_field()
     created_at: datetime = Field(default_factory=now)
 
 

@@ -102,13 +102,64 @@ def _cozy_daylight() -> StylePreset:
     )
 
 
+GRITTY_MASTER = """MASTER CHARACTER STYLE — MANDATORY
+
+All characters must follow the exact same visual identity:
+
+ART STYLE:
+- Gritty hand-drawn 2D comic illustration, post-apocalyptic urban horror.
+- Heavy, slightly rough black ink outlines with visible hatching on clothes and shadows.
+- Grunge paint texture, scratches and stains on surfaces; detailed decaying urban backgrounds.
+- Night and storm moods: heavy rain streaks, wet reflective streets, purple and slate-blue overcast sky.
+- Warm practical light accents (flashlights, street lamps, fire) against cold desaturated shadows.
+- Cinematic composition with depth: foreground character, mid-ground props, distant city and hills.
+
+HEAD AND FACE — CRITICAL:
+- Perfectly round, smooth cartoon head, flat off-white to light-gray face.
+- Simple black oval eyes, thick expressive black eyebrows, small simple mouth line.
+- No realistic nose, ears or human facial anatomy.
+- Hair, stubble and beard drawn with ink strokes and may vary per character.
+- Small scratches or dirt on the face are allowed for story moments.
+
+BODY:
+- Adult proportions (about 6.5-7 heads tall), worn practical clothing with folds, straps and reflective stripes.
+- Visible skin on hands uses a light off-white tone; gloves allowed.
+
+CHARACTER CONSISTENCY:
+- Identical head shape, face color and ink style for every character.
+- Preserve each character's established hair, clothing and accessories across scenes."""
+
+
+def _gritty_comic() -> StylePreset:
+    neg = ("realistic skin tones, human facial anatomy, realistic nose, photorealistic, 3D render, smooth vector art, "
+           "chibi, oversized head, bright cheerful colors, pastel, clean sterile background, text, logo, watermark, "
+           "inconsistent character design")
+    return StylePreset(
+        id="gritty_comic_2d",
+        name="Gritty Comic 2D",
+        description="Quadrinho 2D sujo e sombrio: traço de tinta grosso, textura grunge, chuva, céu roxo à noite, "
+                    "cidade em ruínas e luz quente de lanterna. Vertical para TikTok/Reels/Shorts.",
+        master_prompt=GRITTY_MASTER,
+        short_prompt=("Gritty hand-drawn 2D comic illustration, heavy rough black ink outlines, hatching, grunge paint "
+                      "texture, post-apocalyptic urban horror, heavy rain, wet reflective street, purple and slate-blue "
+                      "night sky, warm flashlight glow, cinematic depth. Perfectly round off-white cartoon face, simple "
+                      "black oval eyes, thick expressive eyebrows, small mouth, no nose"),
+        negative=neg,
+        motor_profile="horror_illustrated",
+        traits=("heavy ink outlines", "grunge texture", "rainy night", "purple sky", "warm practical lights",
+                "round off-white face", "thick eyebrows", "detailed urban decay"),
+        palette=("#1c1b24", "#3a3550", "#6b5b8c", "#8a7f99", "#c96b3c", "#e8c27a", "#8f2a2a"),
+        generation={"width": 768, "height": 1344, "steps": 30, "cfg": 6.0},
+    )
+
+
 _PRESETS: dict[str, StylePreset] | None = None
 
 
 def presets() -> dict[str, StylePreset]:
     global _PRESETS
     if _PRESETS is None:
-        _PRESETS = {p.id: p for p in (_dark_cinematic(), _cozy_daylight())}
+        _PRESETS = {p.id: p for p in (_dark_cinematic(), _cozy_daylight(), _gritty_comic())}
     return _PRESETS
 
 

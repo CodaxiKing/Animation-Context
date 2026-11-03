@@ -21,10 +21,11 @@ export function SeriesDetail({ id }: { id: number }) {
       <nav className="tabs" role="tablist">
         {(["episodios", "elenco", "cenarios", "interface"] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
-            {{ episodios: "Episódios", elenco: "Elenco", cenarios: "Cenários", interface: "Estilo e interface" }[t]}
+            {{ episodios: "Episódios", elenco: "Elenco", cenarios: "Cenários", interface: "Estilo e produção" }[t]}
           </button>
         ))}
       </nav>
+      {tab === "interface" && <StyleProduction series={s} onSaved={(x) => series.setData(x)} />}
       {tab === "interface" && <InterfaceForm series={s} onSaved={(x) => series.setData(x)} />}
       {tab === "elenco" && <Cast seriesId={id} />}
       {tab === "cenarios" && <Places seriesId={id} />}
@@ -215,7 +216,7 @@ function InterfaceForm({ series, onSaved }: { series: Series; onSaved: (s: Serie
       <select value={style} onChange={(e) => setStyle(e.target.value)}>
         {styles.data?.map((st) => <option key={st.id} value={st.id}>{st.name}: {st.description}</option>)}
       </select>
-      <h2 className="section-title">Interface de sobrevivência</h2>
+      <h2 className="section-title">Interface de jogo (opcional)</h2>
       <label className="check"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> mostrar barras, relógio e missão</label>
       {enabled && (
         <div className="grid2">
@@ -247,6 +248,45 @@ function InterfaceForm({ series, onSaved }: { series: Series; onSaved: (s: Serie
           } : {}),
           dialogo, efeitos,
         },
+      }))}>Salvar</ActionButton>
+    </section>
+  );
+}
+
+function StyleProduction({ series, onSaved }: { series: Series; onSaved: (s: Series) => void }) {
+  const prod = series.production ?? {};
+  const [qualidade, setQualidade] = useState(prod.qualidade ?? "rapida");
+  const [selo, setSelo] = useState(prod.selo !== false);
+  return (
+    <section className="panel">
+      <h2>Imagem de referência de estilo</h2>
+      <div className="row wrap style-ref">
+        <div className="thumb wide">
+          {series.style_reference
+            ? <img src={assetUrl(series.style_reference)} alt="Referência de estilo da série" />
+            : <span className="muted small">nenhuma</span>}
+        </div>
+        <div className="step-body">
+          <p className="small">Toda cena gerada pela IA segue o estilo desta imagem: traço, cores, luz e textura.
+            Use uma ilustração que você aprova como "a cara da série".</p>
+          <FilePick label={series.style_reference ? "Trocar imagem" : "Enviar imagem"} accept="image/*"
+            onFile={async (f) => onSaved(await api.uploadStyle(series.id, f))} />
+        </div>
+      </div>
+      <h2 className="section-title">Produção automática (IA)</h2>
+      <p className="muted small">"Produzir episódio" gera a imagem de cada cena com os personagens dela, anima com o Wan 2.2
+        e monta o vídeo vertical 9:16 (TikTok, Reels, Shorts) com legenda normal.</p>
+      <div className="row wrap">
+        <label className="field">Qualidade do vídeo
+          <select value={qualidade} onChange={(e) => setQualidade(e.target.value as "rapida" | "alta")}>
+            <option value="rapida">rápida (480×832, mais leve)</option>
+            <option value="alta">alta (704×1280, bem mais lenta em 8 GB)</option>
+          </select>
+        </label>
+        <label className="check"><input type="checkbox" checked={selo} onChange={(e) => setSelo(e.target.checked)} /> mostrar selo "EP X" no vídeo</label>
+      </div>
+      <ActionButton kind="primary" onClick={async () => onSaved(await api.updateSeries(series.id, {
+        production: { ...prod, modo: "ia", qualidade, selo },
       }))}>Salvar</ActionButton>
     </section>
   );

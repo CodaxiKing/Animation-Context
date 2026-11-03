@@ -149,3 +149,9 @@ video.final { width: 100%; max-width: 420px; border-radius: var(--radius); backg
   .scene { grid-template-columns: 96px 1fr; }
   .scene-img { width: 96px; }
 }
+
+.thumb.wide { width: 220px; height: 124px; }
+.style-ref { align-items: flex-start; gap: 16px; }
+.panel.produce { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.panel.produce h2 { margin-bottom: 4px; }

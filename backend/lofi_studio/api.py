@@ -108,6 +108,7 @@ class SeriesPatch(BaseModel):
     style_preset: str | None = None
     synopsis: str | None = None
     interface: dict[str, Any] | None = None
+    production: dict[str, Any] | None = None
 
 
 @api.get("/series")
@@ -142,6 +143,32 @@ def update_series(series_id: int, body: SeriesPatch, s: Session = SessionDep):
         raise HTTPException(422, f"preset desconhecido: {changes['style_preset']}")
     for k, v in changes.items():
         setattr(series, k, v)
+    s.add(series)
+    s.commit()
+    s.refresh(series)
+    return series
+
+
+@api.post("/series/{series_id}/style-reference", status_code=201)
+async def upload_style_reference(series_id: int, file: UploadFile, s: Session = SessionDep):
+    """Imagem que define o estilo de todas as cenas geradas da série (IPAdapter "style transfer")."""
+    series = _get(s, Series, series_id)
+    data = await file.read()
+    if len(data) > 20 * 2**20:
+        raise HTTPException(413, "imagem maior que 20 MB")
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.verify()
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(422, "arquivo não é uma imagem válida") from e
+    dest = pipeline.series_dir(series) / "assets" / "estilo" / f"estilo_{series.slug}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    im.save(dest)
+    asset = Asset(series_id=series.id, kind="style_reference", path=str(dest), meta={"original_name": file.filename})
+    s.add(asset)
+    s.flush()
+    series.style_reference = asset.id
     s.add(series)
     s.commit()
     s.refresh(series)
@@ -471,6 +498,21 @@ def generate_voices(episode_id: int, body: VoicesIn, s: Session = SessionDep):
                                          episode_id=episode_id)}
 
 
+class ProduceIn(BaseModel):
+    clips: str = Field(default="all", pattern="^(all|action)$")
+    quality: str | None = Field(default=None, pattern="^(rapida|alta)$")
+
+
+@api.post("/episodes/{episode_id}/produce", status_code=202)
+def produce_episode(episode_id: int, body: ProduceIn, s: Session = SessionDep):
+    """Um clique: cenas, vozes, imagem de cada cena no estilo da série, animação Wan 2.2 e MP4 vertical."""
+    ep = _get(s, Episode, episode_id)
+    series = s.get(Series, ep.series_id)
+    if not series.style_reference:
+        raise HTTPException(409, "envie a imagem de referência de estilo da série antes")
+    return {"job_id": get_queue().submit("produce_episode", body.model_dump(exclude_none=True), episode_id=episode_id)}
+
+
 class VideoClipsIn(BaseModel):
     scenes: list[int] | None = Field(default=None, max_length=200)   # índices das cenas a animar
     mode: str = Field(default="list", pattern="^(list|all|action)$")  # all: episódio inteiro; action: só ação
@@ -482,6 +524,7 @@ class VideoClipsIn(BaseModel):
     prompt_extra: str = Field(default="", max_length=400)
     workflow: str = Field(default="wan22_i2v", pattern=SLUG)
     harmonize_workflow: str = Field(default="harmonize", pattern=SLUG)
+    quality: str | None = Field(default=None, pattern="^(rapida|alta)$")
 
 
 @api.post("/episodes/{episode_id}/video-clips", status_code=202)

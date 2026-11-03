@@ -1,0 +1,186 @@
+{
+  "_lofi": {
+    "kind": "image",
+    "description": "Cena inteira com 1 personagem (identidade pela âncora) no estilo da imagem de referência. Vertical 9:16 (768x1344), cabe em 8 GB.",
+    "required": [
+      "prompt",
+      "negative",
+      "style",
+      "reference"
+    ],
+    "defaults": {
+      "width": 768,
+      "height": 1344,
+      "steps": 30,
+      "cfg": 6.0,
+      "ckpt": "sd_xl_base_1.0.safetensors",
+      "ipadapter": "ip-adapter-plus_sdxl_vit-h.safetensors",
+      "clip_vision": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+      "style_weight": 0.85,
+      "ip_weight": 0.6,
+      "ip_end": 0.8
+    }
+  },
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "$ckpt"
+    }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "$prompt",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "$negative",
+      "clip": [
+        "1",
+        1
+      ]
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": "$width",
+      "height": "$height",
+      "batch_size": 1
+    }
+  },
+  "11": {
+    "class_type": "IPAdapterModelLoader",
+    "inputs": {
+      "ipadapter_file": "$ipadapter"
+    }
+  },
+  "12": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "$clip_vision"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "$style"
+    }
+  },
+  "21": {
+    "class_type": "IPAdapterAdvanced",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "ipadapter": [
+        "11",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ],
+      "clip_vision": [
+        "12",
+        0
+      ],
+      "weight": "$style_weight",
+      "weight_type": "style transfer",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds_scaling": "V only"
+    }
+  },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "$reference"
+    }
+  },
+  "31": {
+    "class_type": "IPAdapterAdvanced",
+    "inputs": {
+      "model": [
+        "21",
+        0
+      ],
+      "ipadapter": [
+        "11",
+        0
+      ],
+      "image": [
+        "30",
+        0
+      ],
+      "clip_vision": [
+        "12",
+        0
+      ],
+      "weight": "$ip_weight",
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": "$ip_end",
+      "embeds_scaling": "V only"
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "31",
+        0
+      ],
+      "positive": [
+        "2",
+        0
+      ],
+      "negative": [
+        "3",
+        0
+      ],
+      "latent_image": [
+        "4",
+        0
+      ],
+      "seed": "$seed",
+      "steps": "$steps",
+      "cfg": "$cfg",
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1.0
+    }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "filename_prefix": "lofi/scene_styled_1"
+    }
+  }
+}

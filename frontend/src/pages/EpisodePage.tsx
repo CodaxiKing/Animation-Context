@@ -32,6 +32,20 @@ export function EpisodePage({ id }: { id: number }) {
 
       <Script episode={e} onSaved={(x) => ep.setData(x)} />
 
+      <section className="panel produce">
+        <div>
+          <h2>Produzir episódio</h2>
+          <p className="muted small">Cenas → vozes → imagem de cada cena no estilo da série → animação → MP4 vertical com legenda.
+            Em uma GPU de 8 GB leva de 1 a 2 horas para ~2 minutos de vídeo.</p>
+        </div>
+        <div className="row wrap">
+          <ProduceButton disabled={job.running} onStart={(b) => start(api.produce(id, b))} />
+        </div>
+      </section>
+
+      <details className="panel">
+        <summary>Etapas avulsas</summary>
+
       <section className="steps">
         <Step n={1} title="Planejar cenas" hint="roteiro → planos, quem fala, quem está em cena, ações">
           <ActionButton kind="primary" disabled={job.running} onClick={() => start(api.generate(id))}>
@@ -47,6 +61,7 @@ export function EpisodePage({ id }: { id: number }) {
         <ClipStep disabled={job.running || !list.length} selected={[...selected]} onStart={(b) => start(api.clips(id, b))} />
         <ExportStep disabled={job.running || !list.length} onStart={(allow) => start(api.exportEpisode(id, allow))} />
       </section>
+      </details>
 
       <JobBar job={job.job} onCancel={job.job ? async () => { await api.cancelJob(job.job!.id); } : undefined} />
       {job.job?.status === "succeeded" && <JobSummary job={job.job} />}
@@ -235,5 +250,20 @@ function ImageQc({ episodeId }: { episodeId: number }) {
         </ul>
       )}
     </section>
+  );
+}
+
+function ProduceButton({ disabled, onStart }: {
+  disabled: boolean; onStart: (b: { clips: "all" | "action" }) => Promise<unknown>;
+}) {
+  const [clips, setClips] = useState<"all" | "action">("all");
+  return (
+    <>
+      <select aria-label="Animar" value={clips} onChange={(e) => setClips(e.target.value as "all" | "action")}>
+        <option value="all">animar todas as cenas</option>
+        <option value="action">animar só as cenas de ação</option>
+      </select>
+      <ActionButton kind="primary" disabled={disabled} onClick={() => onStart({ clips })}>Produzir episódio</ActionButton>
+    </>
   );
 }

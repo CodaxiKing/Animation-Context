@@ -145,6 +145,29 @@ Fluxo no painel:
 4. Escreva o roteiro e rode as etapas 1 a 5.
 5. Em **Qualidade das imagens**, confira as poses e aprove ou corrija cena a cena antes de exportar.
 
+## Produção automática no estilo da sua imagem (TikTok, Reels, Shorts)
+
+1. Na série, aba **Estilo e produção**:
+   - escolha o estilo **Gritty Comic 2D**, ou o que combinar com a sua imagem;
+   - envie a **imagem de referência de estilo**;
+   - escolha a qualidade do vídeo e se aparece o selo "EP X".
+2. No **Elenco**, cada personagem precisa da imagem de referência (a cara dele) e, para falar, da amostra de voz.
+3. No episódio, clique em **Produzir episódio**. O sistema:
+   - divide o roteiro em cenas e descobre quem está em cada uma;
+   - gera as vozes, e a duração de cada cena passa a seguir a fala;
+   - **desenha cada cena** no estilo da sua imagem, com os personagens da cena dentro dela. Com 2 personagens,
+     cada um fica com a cara travada no seu lado da tela;
+   - **anima** cada cena com o Wan 2.2, encadeando as ações da linha (por exemplo, beber e depois andar);
+   - monta o **MP4 vertical 1080×1920** com legenda normal.
+
+Workflows usados: `scene_styled_0` (sem personagem), `scene_styled_1`, `scene_styled_2` e `wan22_i2v`. Para
+regerar esses workflows depois de mudar a base, rode `python tools/gerar_workflows_estilo.py`.
+
+**Limites:**
+- Até 2 personagens têm a cara travada por cena. Do terceiro em diante, vêm só da descrição.
+- Nos clipes, a boca não segue a voz. A legenda e a voz estão certas, mas a boca mexe de forma genérica.
+- Sem vozes (sem Chatterbox ou sem amostras), o episódio sai sem legenda, porque a legenda vem do áudio.
+
 ## Escrevendo o roteiro para animar bem
 
 ```

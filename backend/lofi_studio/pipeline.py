@@ -147,6 +147,8 @@ def plan_episode(s: Session, episode: Episode, *, duration: float | None = None)
     if len(spec["shots"]) != len(beats):
         raise RuntimeError(f"compilador gerou {len(spec['shots'])} planos para {len(beats)} linhas")
     spec["episode_title"] = episode.title or spec["episode_title"]
+    if (series.production or {}).get("selo") is False:
+        spec.pop("episode", None)            # vídeo limpo: sem o selo "EP X" do modo redes
     ui = series.interface or {}
     hud = {k: ui[k] for k in ("status", "relogio", "missao", "cor") if ui.get(k)}
     if hud:
@@ -719,6 +721,7 @@ WAN_NEGATIVE = ("static image, frozen, still frame, blurry, low quality, jpeg ar
                 "extra limbs, extra fingers, bad hands, flicker, text, subtitles, watermark, logo, 3d render, "
                 "photorealistic, bright saturated colors, morphing, melting")
 MAX_CLIP_FRAMES = 121
+WAN_SIZES = {"rapida": (480, 832), "alta": (704, 1280)}   # vertical 9:16; "alta" é a resolução nativa do Wan 5B
 
 
 def clip_length(seconds: float, fps: int = 24) -> int:
@@ -791,8 +794,77 @@ def start_frames(s: Session, ep: Episode, scenes: list[Scene], ctx: JobContext) 
     return out
 
 
+SCENE_SIZE = (768, 1344)           # 9:16 aproximado, resolução nativa do SDXL
+
+
+def side_masks(folder: Path) -> tuple[Path, Path]:
+    """Máscaras de atenção esquerda/direita (com sobreposição suave no meio) no tamanho da cena gerada."""
+    w, h = SCENE_SIZE
+    x = np.linspace(0, 1, w)
+    left = np.clip((0.62 - x) / 0.16, 0, 1)
+    out = []
+    for name, ramp in (("mask_esq.png", left), ("mask_dir.png", left[::-1])):
+        path = folder / name
+        if not path.is_file():
+            m = (np.tile(ramp, (h, 1)) * 255).astype(np.uint8)
+            Image.fromarray(np.dstack([m, m, m])).save(path)
+        out.append(path)
+    return out[0], out[1]
+
+
+def styled_scene_frame(s: Session, series: Series, ep: Episode, sc: Scene, ctx: JobContext, folder: Path) -> Path:
+    """Cena inteira no estilo da imagem de referência da série, com até 2 personagens de cara travada.
+
+    0 personagens: scene_styled_0 · 1: scene_styled_1 · 2+: scene_styled_2 (os 2 primeiros na ordem da tela,
+    esquerda e direita, cada um na sua metade por máscara de atenção; os demais só pela descrição).
+    """
+    preset = style_master.get(series.style_preset)
+    style_asset = s.get(Asset, series.style_reference)
+    chars = {c.slug: c for c in s.exec(select(Character).where(Character.series_id == series.id))}
+    env = s.exec(select(Environment).where(Environment.series_id == series.id,
+                                           Environment.slug == (sc.environment or ""))).first()
+    place = (env.description or env.name) if env else (sc.environment or "").replace("_", " ")
+    actors = [a for a in sc.shot.get("actors", []) if a["char"] in chars]
+    anchored = [a for a in actors if chars[a["char"]].reference_assets][:2]
+
+    def who(a):
+        ch = chars[a["char"]]
+        view, emotion, pose = keyframes.actor_pose(a)
+        return (f"{ch.description or ch.name}, {keyframes.POSE_PROMPT.get(pose, 'standing')}, "
+                f"{style_master.EMOTIONS.get(keyframes.EMOTION_EN.get(emotion, 'neutral'), '')}")
+
+    images: dict[str, Path] = {"style": Path(style_asset.path)}
+    if len(anchored) >= 2:
+        a, b = anchored
+        images.update(reference_a=_anchor_path(s, series, chars[a["char"]]),
+                      reference_b=_anchor_path(s, series, chars[b["char"]]))
+        images["mask_a"], images["mask_b"] = side_masks(series_dir(series) / "assets")
+        cast = f" Two characters. LEFT: {who(a)}. RIGHT: {who(b)}."
+        workflow = "scene_styled_2"
+    elif anchored:
+        images["reference"] = _anchor_path(s, series, chars[anchored[0]["char"]])
+        cast = f" Character: {who(anchored[0])}."
+        workflow = "scene_styled_1"
+    else:
+        cast = (" Characters: " + " | ".join(who(a) for a in actors) + ".") if actors else " No characters."
+        workflow = "scene_styled_0"
+    extra = [who(a) for a in actors if a not in anchored]
+    if extra and anchored:
+        cast += " Also in scene: " + " | ".join(extra) + "."
+    prompt = (f"{preset.short_prompt}. Vertical 9:16 cinematic illustration, full scene, characters inside the "
+              f"environment. Setting: {place}.{cast} Story moment: {sc.text}")
+    assets = _run_comfy(ctx, workflow, {"prompt": prompt, "negative": preset.negative + ", text, watermark, letters"},
+                        series_dir(series) / "assets" / "raw", "scene_frame", series.id,
+                        [f"ep{ep.number:02d}", f"scene{sc.index}"], images=images)
+    dest = folder / f"scene{sc.index:03d}_v{sc.version}_gerada.png"
+    shutil.copy2(assets[0].path, dest)
+    return dest
+
+
 def generated_scene_frame(s: Session, series: Series, ep: Episode, sc: Scene, ctx: JobContext, folder: Path) -> Path:
     """Cena inteira gerada (personagem dentro do cenário), identidade do personagem principal pela âncora."""
+    if series.style_reference and s.get(Asset, series.style_reference):
+        return styled_scene_frame(s, series, ep, sc, ctx, folder)
     preset = style_master.get(series.style_preset)
     notes = sc.shot.get("director_notes", {})
     actors = sc.shot.get("actors", [])
@@ -842,6 +914,8 @@ def generate_video_clips_task(ctx: JobContext) -> dict:
         clip_dir = episode_dir(series, ep) / "clips"
         series_folder = series_dir(series)
         tags = [f"ep{ep.number:02d}"]
+        quality = ctx.params.get("quality") or (series.production or {}).get("qualidade", "rapida")
+        size = WAN_SIZES.get(quality, WAN_SIZES["rapida"])
     total = sum(len(w[5]) for w in work) or 1
     done_segments, made, errors = 0, {}, {}
     work_dir = series_folder / "assets" / "raw"
@@ -862,7 +936,8 @@ def generate_video_clips_task(ctx: JobContext) -> dict:
                     ctx.progress(0.02 + 0.95 * (done_segments + frac) / total,
                                  f"cena {index}, parte {k + 1}/{len(segments)}: Wan 2.2 {p.phase}")
                 assets = _run_comfy(ctx, ctx.params.get("workflow", "wan22_i2v"),
-                                    {"prompt": prompt, "negative": WAN_NEGATIVE, "length": clip_length(seconds)},
+                                    {"prompt": prompt, "negative": WAN_NEGATIVE, "length": clip_length(seconds),
+                                     "width": size[0], "height": size[1]},
                                     work_dir, "video_clip", series.id, tags + [f"scene{index}", f"part{k}"],
                                     images={"image": start_image}, on_progress=progress)
                 video = next((Path(a.path) for a in assets
@@ -897,3 +972,57 @@ def generate_video_clips_task(ctx: JobContext) -> dict:
             except Exception as e:  # a prévia é só para revisão: o clipe já está salvo
                 errors["previews"] = f"{type(e).__name__}: {e}"
     return {"clips": made, "errors": errors, "segments": done_segments}
+
+
+# --- produção completa em um clique ----------------------------------------------------------------
+class StageContext:
+    """Contexto de uma etapa dentro da tarefa "produce_episode": progresso numa faixa, mesmo cancelamento."""
+
+    def __init__(self, parent: JobContext, lo: float, hi: float, label: str, params: dict):
+        self._p, self._lo, self._hi, self._label = parent, lo, hi, label
+        self.job_id, self.episode_id, self.scene_id = parent.job_id, parent.episode_id, parent.scene_id
+        self.params = params
+
+    def progress(self, value: float, message: str = "") -> None:
+        self._p.progress(self._lo + (self._hi - self._lo) * max(0.0, min(1.0, value)),
+                         f"{self._label}: {message}" if message else self._label)
+
+    def should_cancel(self) -> bool:
+        return self._p.should_cancel()
+
+    def check_cancelled(self) -> None:
+        self._p.check_cancelled()
+
+
+@task("produce_episode")
+def produce_episode_task(ctx: JobContext) -> dict:
+    """Roteiro -> cenas -> vozes -> imagem de cada cena (estilo da série) -> animação -> MP4 vertical.
+
+    Modo "ia" (padrão desta tarefa): toda cena é desenhada pelo ComfyUI e animada pelo Wan 2.2; o motor só monta
+    o vídeo, com legenda normal. Sem amostras de voz/Chatterbox, segue sem vozes (avisa no resultado).
+    """
+    with session_scope() as s:
+        series = s.get(Series, s.get(Episode, ctx.episode_id).series_id)
+        prod = dict(series.production or {})
+    report = {}
+    stages = [
+        ("planejar", 0.0, 0.05, generate_episode_task, {}),
+        ("vozes", 0.05, 0.15, generate_voices_task, {}),
+        ("cenas e animação", 0.15, 0.9, generate_video_clips_task,
+         {"mode": ctx.params.get("clips", "all"), "start_frame": "generated",
+          "quality": ctx.params.get("quality") or prod.get("qualidade", "rapida")}),
+        ("exportar", 0.9, 1.0, export_episode_task, {"allow_unapproved": True}),
+    ]
+    for label, lo, hi, fn, params in stages:
+        ctx.check_cancelled()
+        stage = StageContext(ctx, lo, hi, label, {**params, **ctx.params.get(label, {})})
+        try:
+            report[label] = fn(stage) or {}
+        except (JobCancelled, Cancelled, NoCompatibleInstance):
+            raise
+        except Exception as e:
+            if label == "vozes":           # sem vozes o episódio ainda sai (com tempo estimado e sem legenda)
+                report[label] = {"skipped": f"{type(e).__name__}: {e}"}
+                continue
+            raise
+    return report
