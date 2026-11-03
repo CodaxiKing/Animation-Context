@@ -1,10 +1,13 @@
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from lofi_studio import style_master
 from lofi_studio.api import app
+
+WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 
 SCRIPT = """Roberta acorda no apartamento escuro. A energia caiu.
 Ela pega a lanterna e escuta passos no corredor.

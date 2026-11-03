@@ -1,12 +1,14 @@
 """API HTTP do estúdio (FastAPI). Rode com: uvicorn lofi_studio.api:app --reload --app-dir backend"""
+import io
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -225,6 +227,51 @@ def generate_character_sheet(character_id: int, body: GenerateArt, s: Session = 
     return {"job_id": get_queue().submit("character_sheet", params)}
 
 
+@api.post("/characters/{character_id}/reference", status_code=201)
+async def upload_reference(character_id: int, file: UploadFile, s: Session = SessionDep):
+    """Envia uma imagem de referência; ela vira a âncora de identidade (IPAdapter) do personagem."""
+    ch = _get(s, Character, character_id)
+    series = s.get(Series, ch.series_id)
+    data = await file.read()
+    if len(data) > 20 * 2**20:
+        raise HTTPException(413, "imagem maior que 20 MB")
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.verify()
+        im = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(422, "arquivo não é uma imagem válida") from e
+    dest = pipeline.series_dir(series) / "assets" / "references" / f"{ch.slug}_{len(ch.reference_assets) + 1}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    im.save(dest)
+    asset = Asset(series_id=series.id, kind="character_reference", path=str(dest), tags=[ch.slug],
+                  meta={"original_name": file.filename})
+    s.add(asset)
+    s.flush()
+    ch.reference_assets = [asset.id, *ch.reference_assets]
+    s.add(ch)
+    s.commit()
+    s.refresh(ch)
+    return ch
+
+
+class AnchorIn(BaseModel):
+    asset_id: int
+
+
+@api.post("/characters/{character_id}/anchor")
+def set_anchor(character_id: int, body: AnchorIn, s: Session = SessionDep):
+    """Escolhe qual referência do personagem é a âncora de identidade (a primeira da lista)."""
+    ch = _get(s, Character, character_id)
+    if body.asset_id not in ch.reference_assets:
+        raise HTTPException(422, "o asset não é uma referência deste personagem")
+    ch.reference_assets = [body.asset_id, *[a for a in ch.reference_assets if a != body.asset_id]]
+    s.add(ch)
+    s.commit()
+    s.refresh(ch)
+    return ch
+
+
 @api.post("/environments/{environment_id}/generate-art", status_code=202)
 def generate_environment_art(environment_id: int, body: GenerateArt, s: Session = SessionDep):
     _get(s, Environment, environment_id)
@@ -269,6 +316,30 @@ class GenerateEpisode(BaseModel):
 def generate_episode(episode_id: int, body: GenerateEpisode, s: Session = SessionDep):
     _get(s, Episode, episode_id)
     return {"job_id": get_queue().submit("generate_episode", body.model_dump(exclude_none=True),
+                                         episode_id=episode_id)}
+
+
+@api.get("/episodes/{episode_id}/keyframes")
+def keyframe_plan(episode_id: int, s: Session = SessionDep):
+    """Quais fundos e poses cada cena precisa, e quais ainda não existem na biblioteca da série."""
+    return pipeline.keyframe_plan(s, _get(s, Episode, episode_id))
+
+
+class KeyframesIn(BaseModel):
+    seed: int | None = None
+    instance: str | None = None
+    time_of_day: str = "night"
+    only: list[str] | None = None          # gerar só estas imagens
+    character_workflow: str = Field(default="character_pose", pattern=SLUG)
+    environment_workflow: str = Field(default="environment", pattern=SLUG)
+
+
+@api.post("/episodes/{episode_id}/keyframes", status_code=202)
+def generate_keyframes(episode_id: int, body: KeyframesIn, s: Session = SessionDep):
+    ep = _get(s, Episode, episode_id)
+    if not s.exec(select(Scene).where(Scene.episode_id == ep.id)).first():
+        raise HTTPException(409, "gere o episódio (planejamento das cenas) antes das imagens-chave")
+    return {"job_id": get_queue().submit("generate_keyframes", body.model_dump(exclude_none=True),
                                          episode_id=episode_id)}
 
 

@@ -9,7 +9,8 @@ Animation-Context/
 │   ├── db.py, models.py     SQLModel: SQLite (dev) ou PostgreSQL (LOFI_DATABASE_URL)
 │   ├── motor.py             ponte com o motor-lofi (import de lofi.* e lofi.render em subprocesso)
 │   ├── style_master.py      presets de estilo e montagem de prompts
-│   ├── pipeline.py          tarefas de produção (episódio, cena, export, arte de personagem/cenário)
+│   ├── pipeline.py          tarefas de produção (episódio, cena, imagens-chave, export, arte de personagem/cenário)
+│   ├── keyframes.py         cena -> fundo + poses no padrão de nomes do lofi/imagens.py; âncora do IPAdapter
 │   ├── jobs.py              fila persistida no banco (backend local com threads)
 │   ├── engines.py           catálogo dos serviços e de quem executa cada um
 │   └── comfyui/
@@ -44,6 +45,11 @@ Animation-Context/
 - **Fila.** Para desenvolvimento há o backend `local` (threads). O estado de cada tarefa fica na tabela `job`, então
   trocar por Celery + Redis não muda a API. O backend Celery **ainda não foi implementado**. Tarefas que estavam
   rodando quando o servidor caiu viram `failed` e podem ser repetidas.
+
+- **Imagens-chave, não vídeo gerado.** A IA gera o fundo de cada cenário e as poses de cada personagem, com a
+  identidade travada por uma imagem âncora no IPAdapter. O motor anima a composição no modo "imagens": câmera,
+  paralaxe, respiração, piscar e quem fala se mexendo. As imagens ficam na biblioteca da série e são
+  reaproveitadas entre episódios. Guia para GPUs de 8 GB: [COMFYUI_8GB.md](COMFYUI_8GB.md).
 
 ## Estado dos serviços
 

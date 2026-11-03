@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     comfyui_scan_ports: list[int] = Field(default_factory=lambda: list(range(8188, 8193)))
     comfyui_timeout_s: float = 600.0
     comfyui_max_retries: int = 2
+    comfyui_websocket: bool = True   # progresso por passo; False usa só polling de /history
 
     # Fila: "local" (threads, sem Redis) ou "celery" (requer celery + redis instalados).
     queue_backend: str = "local"

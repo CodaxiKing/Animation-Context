@@ -27,6 +27,8 @@ MODEL_INPUT_FOLDERS = {
     "clip_name2": "text_encoders", "model_name": "upscale_models", "ipadapter_file": "ipadapter",
     "style_model_name": "style_models", "sam_model": "sams", "model_path": "models",
 }
+# Mesma entrada, pasta diferente conforme o nó.
+CLASS_INPUT_FOLDERS = {("CLIPVisionLoader", "clip_name"): "clip_vision"}
 
 
 class WorkflowError(ValueError):
@@ -156,8 +158,9 @@ def model_references(wf: Workflow, object_info: dict | None = None) -> list[dict
                 options = spec[0]
         looks_like_file = bool(re.search(r"\.(safetensors|ckpt|pt|pth|bin|gguf|onnx|sft)$", value, re.I))
         if (options is not None and looks_like_file) or (options is None and name in MODEL_INPUT_FOLDERS):
+            folder = CLASS_INPUT_FOLDERS.get((cls, name), MODEL_INPUT_FOLDERS.get(name))
             refs.append({"node": node_id, "class_type": cls, "input": name, "value": value,
-                         "folder_hint": MODEL_INPUT_FOLDERS.get(name), "options": options})
+                         "folder_hint": folder, "options": options})
     return refs
 
 

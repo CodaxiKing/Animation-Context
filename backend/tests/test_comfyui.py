@@ -50,11 +50,11 @@ def test_ui_format_is_rejected():
 def test_dependency_report_lists_missing_nodes_and_models():
     fake = FakeComfy(checkpoints=["other.safetensors"])
     wf = parse({**sheet().graph,
-                "8": {"class_type": "IPAdapterModelLoader", "inputs": {"ipadapter_file": "ip.safetensors"}}})
+                "8": {"class_type": "VHS_VideoCombine", "inputs": {"frame_rate": 24}}})
     wf.graph["1"]["inputs"]["ckpt_name"] = "sd_xl_base_1.0.safetensors"
     rep = check(wf, fake.object_info())
     assert not rep["compatible"]
-    assert rep["missing_nodes"][0]["install"]["pack"] == "ComfyUI_IPAdapter_plus"
+    assert rep["missing_nodes"][0]["install"]["pack"] == "ComfyUI-VideoHelperSuite"
     assert rep["missing_models"][0]["file"] == "sd_xl_base_1.0.safetensors"
     assert rep["missing_models"][0]["folder"] == "checkpoints"
 

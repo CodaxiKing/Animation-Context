@@ -30,8 +30,11 @@ def isolated_settings(tmp_path, monkeypatch):
 
 
 def _png() -> bytes:
+    """Figura escura sobre fundo cinza liso, como a saída de uma pose (dá para recortar)."""
     buf = io.BytesIO()
-    Image.new("RGB", (8, 8), (40, 40, 50)).save(buf, "PNG")
+    im = Image.new("RGB", (64, 96), (200, 200, 202))
+    im.paste((40, 40, 50), (22, 10, 42, 90))
+    im.save(buf, "PNG")
     return buf.getvalue()
 
 
@@ -41,7 +44,8 @@ class FakeComfy:
     def __init__(self, *, nodes=None, checkpoints=("model_a.safetensors",), polls_until_done=1,
                  fail_times=0, queue_len=0):
         self.nodes = set(nodes or {"CheckpointLoaderSimple", "CLIPTextEncode", "EmptyLatentImage",
-                                   "KSampler", "VAEDecode", "SaveImage", "LoadImage"})
+                                   "KSampler", "VAEDecode", "SaveImage", "LoadImage", "IPAdapterModelLoader",
+                                   "CLIPVisionLoader", "IPAdapterAdvanced"})
         self.checkpoints = list(checkpoints)
         self.polls_until_done = polls_until_done
         self.fail_times = fail_times
@@ -57,6 +61,12 @@ class FakeComfy:
         info = {n: {"input": {"required": {}}} for n in self.nodes}
         if "CheckpointLoaderSimple" in info:
             info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [self.checkpoints]
+        if "IPAdapterModelLoader" in info:
+            info["IPAdapterModelLoader"]["input"]["required"]["ipadapter_file"] = [
+                ["ip-adapter-plus_sdxl_vit-h.safetensors"]]
+        if "CLIPVisionLoader" in info:
+            info["CLIPVisionLoader"]["input"]["required"]["clip_name"] = [
+                ["CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"]]
         return info
 
     def handler(self, request: httpx.Request) -> httpx.Response:

@@ -1,8 +1,9 @@
 """Produção do episódio: tarefas da fila que ligam o banco, o motor-lofi e o ComfyUI.
 
-Pasta de trabalho de cada série (lida pelo lofi.render):
+Pasta de trabalho de cada série, no mesmo formato de series/<serie>/ do motor (lida pelo lofi.render):
   data/series/<slug>/personagens.json      fichas travadas (o motor sempre usa estas)
-  data/series/<slug>/epNN/spec.json        roteiro técnico do episódio
+  data/series/<slug>/epNN.json             roteiro técnico do episódio
+  data/series/<slug>/imagens/              imagens-chave (fundos e recortes) compartilhadas pela série
   data/series/<slug>/epNN/scenes/          prévias de cada cena
 """
 import json
@@ -12,12 +13,13 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from . import motor, style_master
+from . import keyframes, motor, style_master
 from .comfyui import workflow as wfmod
-from .comfyui.orchestrator import run_workflow
+from .comfyui.orchestrator import Cancelled, run_workflow
+from .comfyui.registry import NoCompatibleInstance
 from .config import get_settings
 from .db import session_scope
-from .jobs import JobContext, task
+from .jobs import JobCancelled, JobContext, task
 from .models import (Asset, Character, Environment, Episode, EpisodeStatus, Scene, SceneStatus, Series)
 
 
@@ -126,7 +128,7 @@ def write_spec(s: Session, episode: Episode) -> Path:
     if scenes:
         spec["shots"] = [sc.shot for sc in scenes]
         spec["total"] = max(sc.end for sc in scenes)
-    path = episode_dir(series, episode) / "spec.json"
+    path = series_dir(series) / f"ep{episode.number:02d}.json"
     path.write_text(json.dumps(spec, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return path
 
@@ -227,14 +229,16 @@ def export_episode_task(ctx: JobContext) -> dict:
 
 
 def _run_comfy(ctx: JobContext, workflow_name: str, params: dict, out_dir: Path, kind: str,
-               series_id: int, tags: list[str]) -> list[Asset]:
+               series_id: int, tags: list[str], *, images: dict[str, Path] | None = None,
+               on_progress=None) -> list[Asset]:
     settings = get_settings()
     wf = wfmod.load(settings.workflows_dir / f"{workflow_name}.json")
     result = run_workflow(
-        wf, params, out_dir, seed=ctx.params.get("seed"), instance=ctx.params.get("instance"),
+        wf, params, out_dir, images=images, seed=ctx.params.get("seed"), instance=ctx.params.get("instance"),
         job_id=ctx.job_id, max_retries=settings.comfyui_max_retries, timeout=settings.comfyui_timeout_s,
-        on_progress=lambda p: ctx.progress(0.1 + 0.85 * (p.value / p.max if p.max else 0), f"ComfyUI {p.phase}"),
-        should_cancel=ctx.should_cancel)
+        on_progress=on_progress or (lambda p: ctx.progress(0.1 + 0.85 * (p.value / p.max if p.max else 0),
+                                                            f"ComfyUI {p.phase}")),
+        should_cancel=ctx.should_cancel, use_websocket=settings.comfyui_websocket)
     assets = []
     with session_scope() as s:
         for f in result.files:
@@ -286,3 +290,117 @@ def environment_art_task(ctx: JobContext) -> dict:
         s.add(env)
         s.commit()
     return {"assets": [a.id for a in assets]}
+
+
+# --- imagens-chave (ComfyUI) para o modo "imagens" do motor ----------------------------
+def images_dir(series: Series) -> Path:
+    path = series_dir(series) / keyframes.IMAGES_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def keyframe_plan(s: Session, episode: Episode) -> dict:
+    series = s.get(Series, episode.series_id)
+    folder = images_dir(series)
+    scenes = s.exec(select(Scene).where(Scene.episode_id == episode.id).order_by(Scene.index)).all()
+    cfgs = [keyframes.scene_images(sc.shot, sc.environment) for sc in scenes]
+    needed = keyframes.requirements(cfgs)
+    for name, req in needed.items():
+        req["exists"] = (folder / f"{name}.png").is_file()
+    return {"scenes": [{"scene_id": sc.id, "index": sc.index, "imagens": cfg} for sc, cfg in zip(scenes, cfgs)],
+            "images": needed, "missing": sorted(n for n, r in needed.items() if not r["exists"])}
+
+
+def _anchor_path(s: Session, series: Series, char: Character) -> Path:
+    if not char.reference_assets:
+        raise ValueError(f"{char.slug}: sem imagem âncora. Gere a folha de referência ou envie uma imagem.")
+    asset = s.get(Asset, char.reference_assets[0])
+    if asset is None or not Path(asset.path).is_file():
+        raise ValueError(f"{char.slug}: arquivo da imagem âncora não encontrado")
+    dest = series_dir(series) / "assets" / "anchors" / f"{char.slug}_{asset.id}.png"
+    return dest if dest.is_file() else keyframes.anchor_for_ipadapter(Path(asset.path), dest)
+
+
+def _import_keyframe(series: Series, raw: Path, name: str, job_id: int) -> Path:
+    out = Path(motor.lofi("imagens").importar(str(series_dir(series)), str(raw), name))
+    with session_scope() as s:
+        s.add(Asset(series_id=series.id, kind="keyframe", path=str(out), tags=[name], job_id=job_id,
+                    meta={"source": str(raw)}))
+        s.commit()
+    return out
+
+
+@task("generate_keyframes")
+def generate_keyframes_task(ctx: JobContext) -> dict:
+    """Gera fundos e poses que faltam (ComfyUI), recorta, e liga as cenas ao modo "imagens" do motor."""
+    with session_scope() as s:
+        ep = s.get(Episode, ctx.episode_id)
+        series = s.get(Series, ep.series_id)
+        preset = style_master.get(series.style_preset)
+        plan = keyframe_plan(s, ep)
+        chars = {c.slug: c for c in s.exec(select(Character).where(Character.series_id == series.id))}
+        envs = {e.slug: e for e in s.exec(select(Environment).where(Environment.series_id == series.id))}
+        s.expunge_all()
+
+    missing = plan["missing"] if not ctx.params.get("only") else [n for n in plan["missing"] if n in ctx.params["only"]]
+    generated, errors = [], {}
+    raw_dir = series_dir(series) / "assets" / "raw"
+    for i, name in enumerate(missing):
+        req = plan["images"][name]
+        base = i / max(1, len(missing))
+        def progress(p, base=base, name=name):
+            frac = p.value / p.max if p.max else 0
+            ctx.progress(0.05 + 0.8 * (base + frac / max(1, len(missing))), f"{name}: ComfyUI {p.phase}")
+        ctx.progress(0.05 + 0.8 * base, f"gerando {name} ({i + 1}/{len(missing)})")
+        try:
+            if req["kind"] == "environment":
+                env = envs.get(req["environment"])
+                desc = (env.description or env.name) if env else req["environment"].replace("_", " ")
+                prompts = style_master.environment_prompt(preset, desc,
+                                                          time_of_day=ctx.params.get("time_of_day", "night"))
+                assets = _run_comfy(ctx, ctx.params.get("environment_workflow", "environment"), prompts,
+                                    raw_dir, "environment", series.id, [name], on_progress=progress)
+            else:
+                char = chars.get(req["char"])
+                if char is None:
+                    raise ValueError(f"personagem {req['char']} não cadastrado na série")
+                with session_scope() as s:
+                    anchor = _anchor_path(s, series, char)
+                prompts = style_master.character_prompt(
+                    preset, char.description or char.name, view=keyframes.VIEW_EN[req["view"]],
+                    emotion=keyframes.EMOTION_EN[req["emotion"]], pose=keyframes.POSE_PROMPT[req["pose"]],
+                    background="plain flat light-gray background, no props, no floor texture")
+                assets = _run_comfy(ctx, ctx.params.get("character_workflow", "character_pose"), prompts,
+                                    raw_dir, "character_pose", series.id, [name, char.slug],
+                                    images={"reference": anchor}, on_progress=progress)
+            _import_keyframe(series, Path(assets[0].path), name, ctx.job_id)
+            generated.append(name)
+        except (JobCancelled, Cancelled, NoCompatibleInstance):
+            raise
+        except Exception as e:  # uma imagem com problema não derruba as outras
+            errors[name] = f"{type(e).__name__}: {e}"
+
+    ctx.progress(0.88, "ligando cenas às imagens")
+    folder = images_dir(series)
+    ready, blocked = [], {}
+    with session_scope() as s:
+        ep = s.get(Episode, ctx.episode_id)
+        for item in plan["scenes"]:
+            sc = s.get(Scene, item["scene_id"])
+            cfg = item["imagens"]
+            names = [p["img"] for p in cfg["personagens"]] + ([cfg["fundo"]] if cfg.get("fundo") else [])
+            absent = [n for n in names if not (folder / f"{n}.png").is_file()]
+            if absent:
+                sc.status, sc.review_notes = SceneStatus.needs_fix, "imagens faltando: " + ", ".join(absent)
+                blocked[sc.index] = absent
+            else:
+                sc.shot = {**sc.shot, "imagens": cfg}
+                sc.version += 1
+                ready.append(sc)
+            s.add(sc)
+        s.commit()
+        if ready:
+            render_previews(s, ep, ready)
+        ready_idx = [sc.index for sc in ready]
+    return {"generated": generated, "errors": errors, "scenes_ready": ready_idx,
+            "scenes_blocked": blocked}
