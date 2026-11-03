@@ -38,18 +38,38 @@ def _png() -> bytes:
     return buf.getvalue()
 
 
+def figure_png(size=(416, 608)) -> bytes:
+    """Personagem no estilo da série: corpo escuro, cabeça redonda clara com contorno, olhos e boca."""
+    from PIL import ImageDraw
+    w, h = size
+    im = Image.new("RGB", size, (200, 200, 202))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([w * .36, h * .31, w * .64, h * .74], 20, fill=(60, 62, 70), outline=(20, 20, 24), width=4)
+    d.rectangle([w * .4, h * .74, w * .6, h * .97], fill=(40, 42, 50))
+    cx, cy, r = w * .5, h * .185, h * .078
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(226, 224, 228), outline=(22, 22, 26), width=5)
+    for dx in (-.32, .32):
+        d.ellipse([cx + dx * r - 5, cy - 6, cx + dx * r + 5, cy + 6], fill=(10, 10, 10))
+    d.line([cx - 10, cy + .45 * r, cx + 10, cy + .45 * r], fill=(10, 10, 10), width=3)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 class FakeComfy:
     """Servidor ComfyUI de mentira para httpx.MockTransport."""
 
     def __init__(self, *, nodes=None, checkpoints=("model_a.safetensors",), polls_until_done=1,
-                 fail_times=0, queue_len=0):
+                 fail_times=0, queue_len=0, image_bytes=None):
         self.nodes = set(nodes or {"CheckpointLoaderSimple", "CLIPTextEncode", "EmptyLatentImage",
                                    "KSampler", "VAEDecode", "SaveImage", "LoadImage", "IPAdapterModelLoader",
-                                   "CLIPVisionLoader", "IPAdapterAdvanced"})
+                                   "CLIPVisionLoader", "IPAdapterAdvanced", "LoadImageMask", "VAEEncode",
+                                   "SetLatentNoiseMask", "ImageCompositeMasked"})
         self.checkpoints = list(checkpoints)
         self.polls_until_done = polls_until_done
         self.fail_times = fail_times
         self.queue_len = queue_len
+        self.image_bytes = image_bytes
         self.prompts: dict[str, dict] = {}
         self.polls: dict[str, int] = {}
         self.uploads: list[str] = []
@@ -119,7 +139,7 @@ class FakeComfy:
                 {"filename": f"{pid}_00001_.png", "subfolder": "lofi", "type": "output"}]}},
                 "status": {"status_str": "success", "completed": True, "messages": []}}})
         if path == "/view":
-            return httpx.Response(200, content=_png(), headers={"content-type": "image/png"})
+            return httpx.Response(200, content=self.image_bytes or _png(), headers={"content-type": "image/png"})
         return httpx.Response(404, json={"error": path})
 
 

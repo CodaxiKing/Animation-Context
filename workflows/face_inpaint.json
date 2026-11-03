@@ -1,0 +1,22 @@
+{
+  "_lofi": {
+    "kind": "image",
+    "description": "Variante de rosto (olhos fechados ou boca aberta) por inpainting só na máscara. Fora da máscara o pixel é idêntico ao original (ImageCompositeMasked), então o recorte e a pose não mudam. Só nós nativos; cabe em 8 GB.",
+    "required": ["prompt", "negative", "image", "mask"],
+    "defaults": {"steps": 24, "cfg": 5.5, "denoise": 0.72, "ckpt": "sd_xl_base_1.0.safetensors"}
+  },
+  "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "$ckpt"}},
+  "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "$prompt", "clip": ["1", 1]}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "$negative", "clip": ["1", 1]}},
+  "10": {"class_type": "LoadImage", "inputs": {"image": "$image"}},
+  "11": {"class_type": "LoadImageMask", "inputs": {"image": "$mask", "channel": "red"}},
+  "12": {"class_type": "VAEEncode", "inputs": {"pixels": ["10", 0], "vae": ["1", 2]}},
+  "13": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["12", 0], "mask": ["11", 0]}},
+  "5": {"class_type": "KSampler", "inputs": {
+    "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["13", 0],
+    "seed": "$seed", "steps": "$steps", "cfg": "$cfg", "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": "$denoise"}},
+  "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+  "14": {"class_type": "ImageCompositeMasked", "inputs": {
+    "destination": ["10", 0], "source": ["6", 0], "x": 0, "y": 0, "resize_source": false, "mask": ["11", 0]}},
+  "7": {"class_type": "SaveImage", "inputs": {"images": ["14", 0], "filename_prefix": "lofi/face_variant"}}
+}

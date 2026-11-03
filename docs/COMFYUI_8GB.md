@@ -58,6 +58,26 @@ GET  /api/comfyui/workflows/environment/check
 
 As imagens ficam na biblioteca da série e são reaproveitadas em todos os episódios. Um personagem gerado uma vez se mantém igual daí em diante e não gasta GPU de novo.
 
+## Olhos e boca (variantes por inpainting)
+
+Para cada pose, a mesma tarefa gera mais duas imagens:
+
+- **`<pose>_piscando`**: olhos fechados. O motor troca por ela por 0,12 s a cada ~3,6 s.
+- **`<pose>_falando`**: boca aberta. O motor troca por ela enquanto a voz do personagem estiver alta.
+
+Como funciona: o V5 acha a cabeça redonda (detecção de círculo) e desenha uma máscara só nos olhos ou só na boca,
+sempre dentro da cabeça. O workflow [`face_inpaint.json`](../workflows/face_inpaint.json) refaz apenas essa área e
+cola o resultado sobre o original. Fora da máscara, os pixels são idênticos, então a pose, a roupa e o recorte não
+mudam e a troca não "pula" na tela. Usa só nós nativos do ComfyUI, sem pacote extra.
+
+- Pose de costas não ganha variantes.
+- Se a cabeça não for encontrada (por exemplo, rosto coberto), a variante não é gerada e a cena continua funcionando
+  sem ela. O motivo aparece em `errors` no resultado da tarefa.
+- Para desligar: `{"face_variants": false}`. Para refazer uma variante, apague o arquivo dela e rode de novo com
+  `{"only": ["roberta_frente_medo_em_pe"]}`.
+- **`denoise`** (padrão 0,72, em `face_inpaint.json`): se os olhos ou a boca não mudam o suficiente, suba para 0,8.
+  Se o rosto muda de estilo, desça para 0,6.
+
 ## Ajustes finos
 
 Os parâmetros ficam em `_lofi.defaults` de cada workflow, ou vão no corpo da chamada:

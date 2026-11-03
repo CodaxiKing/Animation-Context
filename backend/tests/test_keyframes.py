@@ -68,13 +68,13 @@ def test_keyframes_generated_cut_out_and_rendered(fake_registry, monkeypatch):
 
         # sem âncora: as poses falham com explicação e as cenas ficam bloqueadas
         plan = client.get(f"/api/episodes/{ep['id']}/keyframes").json()
-        job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/keyframes", json={}).json()["job_id"])
+        job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/keyframes", json={"face_variants": False}).json()["job_id"])
         assert any("âncora" in e for e in job["result"]["errors"].values()), job
 
         r = client.post(f"/api/characters/{ch['id']}/reference", files={"file": ("ref.png", _png_bytes(), "image/png")})
         assert r.status_code == 201 and len(r.json()["reference_assets"]) == 1
 
-        job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/keyframes", json={"seed": 9}).json()["job_id"])
+        job = wait_job(client, client.post(f"/api/episodes/{ep['id']}/keyframes", json={"seed": 9, "face_variants": False}).json()["job_id"])
         assert job["status"] == "succeeded", (job["error"], job["result"].get("traceback"))
         res = job["result"]
         assert not res["errors"] and not res["scenes_blocked"]

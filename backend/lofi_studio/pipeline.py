@@ -11,9 +11,10 @@ import re
 import shutil
 from pathlib import Path
 
+from PIL import Image
 from sqlmodel import Session, select
 
-from . import keyframes, motor, story_analysis, style_master, voices
+from . import face, keyframes, motor, story_analysis, style_master, voices
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -333,6 +334,73 @@ def _import_keyframe(series: Series, raw: Path, name: str, job_id: int) -> Path:
     return out
 
 
+def _pose_prompts(preset, char: Character, req: dict) -> dict:
+    return style_master.character_prompt(
+        preset, char.description or char.name, view=keyframes.VIEW_EN[req["view"]],
+        emotion=keyframes.EMOTION_EN[req["emotion"]], pose=keyframes.POSE_PROMPT[req["pose"]],
+        background="plain flat light-gray background, no props, no floor texture")
+
+
+FACE_EDITS = {
+    "_piscando": ("eyes", "EDIT: eyes closed, shut eyelids drawn as short curved black lines, same face",
+                  ", open eyes, pupils, eyeballs"),
+    "_falando": ("mouth", "EDIT: mouth open while speaking, small simple open mouth with a dark interior, same face",
+                 ", closed mouth, teeth, tongue, lips"),
+}
+
+
+def _pose_source(series: Series, name: str) -> Path:
+    """Imagem original (antes do recorte) de uma pose; para poses importadas, o recorte sobre cinza liso."""
+    with session_scope() as s:
+        asset = s.exec(select(Asset).where(Asset.series_id == series.id, Asset.kind == "keyframe")
+                       .order_by(Asset.id.desc())).all()
+        src = next((a.meta.get("source") for a in asset if name in a.tags and a.meta.get("source")), None)
+    if src and Path(src).is_file():
+        return Path(src)
+    cut = Image.open(images_dir(series) / f"{name}.png").convert("RGBA")
+    flat = Image.new("RGB", cut.size, (200, 200, 202))
+    flat.paste(cut, mask=cut.split()[3])
+    dest = series_dir(series) / "assets" / "raw" / f"{name}_flat.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    flat.save(dest)
+    return dest
+
+
+def face_variants(ctx: JobContext, series: Series, preset, char: Character, name: str, req: dict,
+                  errors: dict, on_progress=None) -> list[str]:
+    """Gera <pose>_piscando e <pose>_falando por inpainting só nos olhos / na boca."""
+    if req["view"] == "costas":
+        return []
+    todo = [sfx for sfx in FACE_EDITS if not (images_dir(series) / f"{name}{sfx}.png").is_file()]
+    if not todo:
+        return []
+    src = _pose_source(series, name)
+    head = face.find_head(src)
+    if head is None:
+        for sfx in todo:
+            errors[name + sfx] = "rosto não encontrado na pose (variante não gerada)"
+        return []
+    made = []
+    base = _pose_prompts(preset, char, req)
+    for sfx in todo:
+        part, edit, neg = FACE_EDITS[sfx]
+        try:
+            mask = face.save_mask(src, head, part, req["view"],
+                                  series_dir(series) / "assets" / "masks" / f"{name}{sfx}.png")
+            prompts = {"prompt": base["prompt"] + "\n" + edit, "negative": base["negative"] + neg}
+            assets = _run_comfy(ctx, ctx.params.get("face_workflow", "face_inpaint"), prompts,
+                                series_dir(series) / "assets" / "raw", "face_variant", series.id,
+                                [name + sfx, char.slug], images={"image": src, "mask": mask},
+                                on_progress=on_progress)
+            _import_keyframe(series, Path(assets[0].path), name + sfx, ctx.job_id)
+            made.append(name + sfx)
+        except (JobCancelled, Cancelled, NoCompatibleInstance):
+            raise
+        except Exception as e:
+            errors[name + sfx] = f"{type(e).__name__}: {e}"
+    return made
+
+
 @task("generate_keyframes")
 def generate_keyframes_task(ctx: JobContext) -> dict:
     """Gera fundos e poses que faltam (ComfyUI), recorta, e liga as cenas ao modo "imagens" do motor."""
@@ -353,8 +421,8 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
         base = i / max(1, len(missing))
         def progress(p, base=base, name=name):
             frac = p.value / p.max if p.max else 0
-            ctx.progress(0.05 + 0.8 * (base + frac / max(1, len(missing))), f"{name}: ComfyUI {p.phase}")
-        ctx.progress(0.05 + 0.8 * base, f"gerando {name} ({i + 1}/{len(missing)})")
+            ctx.progress(0.05 + 0.55 * (base + frac / max(1, len(missing))), f"{name}: ComfyUI {p.phase}")
+        ctx.progress(0.05 + 0.55 * base, f"gerando {name} ({i + 1}/{len(missing)})")
         try:
             if req["kind"] == "environment":
                 env = envs.get(req["environment"])
@@ -369,10 +437,7 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
                     raise ValueError(f"personagem {req['char']} não cadastrado na série")
                 with session_scope() as s:
                     anchor = _anchor_path(s, series, char)
-                prompts = style_master.character_prompt(
-                    preset, char.description or char.name, view=keyframes.VIEW_EN[req["view"]],
-                    emotion=keyframes.EMOTION_EN[req["emotion"]], pose=keyframes.POSE_PROMPT[req["pose"]],
-                    background="plain flat light-gray background, no props, no floor texture")
+                prompts = _pose_prompts(preset, char, req)
                 assets = _run_comfy(ctx, ctx.params.get("character_workflow", "character_pose"), prompts,
                                     raw_dir, "character_pose", series.id, [name, char.slug],
                                     images={"reference": anchor}, on_progress=progress)
@@ -382,6 +447,16 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
             raise
         except Exception as e:  # uma imagem com problema não derruba as outras
             errors[name] = f"{type(e).__name__}: {e}"
+
+    variants = []
+    if ctx.params.get("face_variants", True):
+        poses = [(n, r) for n, r in plan["images"].items() if r["kind"] == "character"
+                 and (images_dir(series) / f"{n}.png").is_file()
+                 and (not ctx.params.get("only") or n in ctx.params["only"])]
+        for i, (name, req) in enumerate(poses):
+            ctx.progress(0.6 + 0.25 * i / max(1, len(poses)), f"olhos e boca: {name}")
+            if req["char"] in chars:
+                variants += face_variants(ctx, series, preset, chars[req["char"]], name, req, errors)
 
     ctx.progress(0.88, "ligando cenas às imagens")
     folder = images_dir(series)
@@ -405,7 +480,7 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
         if ready:
             render_previews(s, ep, ready)
         ready_idx = [sc.index for sc in ready]
-    return {"generated": generated, "errors": errors, "scenes_ready": ready_idx,
+    return {"generated": generated, "face_variants": variants, "errors": errors, "scenes_ready": ready_idx,
             "scenes_blocked": blocked}
 
 

@@ -376,6 +376,8 @@ class KeyframesIn(BaseModel):
     instance: str | None = None
     time_of_day: str = "night"
     only: list[str] | None = None          # gerar só estas imagens
+    face_variants: bool = True             # olhos fechados (_piscando) e boca aberta (_falando) por inpainting
+    face_workflow: str = Field(default="face_inpaint", pattern=SLUG)
     character_workflow: str = Field(default="character_pose", pattern=SLUG)
     environment_workflow: str = Field(default="environment", pattern=SLUG)
 
