@@ -255,6 +255,52 @@ async def upload_reference(character_id: int, file: UploadFile, s: Session = Ses
     return ch
 
 
+AUDIO_TYPES = {".wav", ".mp3", ".flac", ".ogg"}
+
+
+@api.post("/characters/{character_id}/voice-sample", status_code=201)
+async def upload_voice_sample(character_id: int, file: UploadFile, s: Session = SessionDep):
+    """Amostra de 6 a 15 s da voz do personagem (fala limpa, sem música). Vira a referência do Chatterbox."""
+    ch = _get(s, Character, character_id)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in AUDIO_TYPES:
+        raise HTTPException(422, f"formato de áudio não aceito: use {', '.join(sorted(AUDIO_TYPES))}")
+    data = await file.read()
+    if not data or len(data) > 20 * 2**20:
+        raise HTTPException(413, "áudio vazio ou maior que 20 MB")
+    series = s.get(Series, ch.series_id)
+    dest = pipeline.series_dir(series) / "assets" / "voices" / f"{ch.slug}_sample{ext}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    asset = Asset(series_id=series.id, kind="voice_sample", path=str(dest), tags=[ch.slug],
+                  meta={"original_name": file.filename})
+    s.add(asset)
+    s.flush()
+    ch.voice = {"provider": "chatterbox", "exaggeration": 0.5, "cfg_weight": 0.5, "temperature": 0.8,
+                **ch.voice, "sample_asset": asset.id}
+    s.add(ch)
+    s.commit()
+    s.refresh(ch)
+    return ch
+
+
+class VoiceSettings(BaseModel):
+    exaggeration: float | None = Field(default=None, ge=0.25, le=1.2)
+    cfg_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    temperature: float | None = Field(default=None, ge=0.1, le=1.5)
+    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+
+
+@api.put("/characters/{character_id}/voice")
+def update_voice(character_id: int, body: VoiceSettings, s: Session = SessionDep):
+    ch = _get(s, Character, character_id)
+    ch.voice = {**ch.voice, **body.model_dump(exclude_unset=True)}
+    s.add(ch)
+    s.commit()
+    s.refresh(ch)
+    return ch
+
+
 class AnchorIn(BaseModel):
     asset_id: int
 
@@ -340,6 +386,29 @@ def generate_keyframes(episode_id: int, body: KeyframesIn, s: Session = SessionD
     if not s.exec(select(Scene).where(Scene.episode_id == ep.id)).first():
         raise HTTPException(409, "gere o episódio (planejamento das cenas) antes das imagens-chave")
     return {"job_id": get_queue().submit("generate_keyframes", body.model_dump(exclude_none=True),
+                                         episode_id=episode_id)}
+
+
+class VoicesIn(BaseModel):
+    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)   # muda a seed de todas as falas
+
+
+@api.get("/episodes/{episode_id}/voices")
+def voice_plan(episode_id: int, s: Session = SessionDep):
+    """Falas que serão geradas, com voz, emoção e parâmetros; e quem ainda não tem amostra de voz."""
+    lines, missing = pipeline.voice_lines(s, _get(s, Episode, episode_id))
+    return {"lines": [{"scene": ln.index, "voice": ln.voice, "text": ln.text, "emotion": ln.emotion,
+                       "exaggeration": ln.exaggeration, "cfg_weight": ln.cfg_weight,
+                       "ready": ln.out.is_file()} for ln in lines],
+            "missing_samples": sorted(missing)}
+
+
+@api.post("/episodes/{episode_id}/voices", status_code=202)
+def generate_voices(episode_id: int, body: VoicesIn, s: Session = SessionDep):
+    ep = _get(s, Episode, episode_id)
+    if not s.exec(select(Scene).where(Scene.episode_id == ep.id)).first():
+        raise HTTPException(409, "gere o episódio (planejamento das cenas) antes das vozes")
+    return {"job_id": get_queue().submit("generate_voices", body.model_dump(exclude_none=True),
                                          episode_id=episode_id)}
 
 

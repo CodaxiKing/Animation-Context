@@ -31,6 +31,34 @@ def get_engine():
 def init_db() -> None:
     from . import models  # noqa: F401  registra as tabelas
     SQLModel.metadata.create_all(get_engine())
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """Migração mínima: colunas novas dos modelos entram em tabelas que já existem.
+
+    Só adiciona (nunca remove ou altera). Colunas JSON obrigatórias recebem '{}' ou '[]' como padrão.
+    """
+    from sqlalchemy import JSON, inspect, text
+    engine = get_engine()
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col.type.compile(engine.dialect)}'
+                if not col.nullable:
+                    default = None
+                    if isinstance(col.type, JSON):
+                        default = "'[]'" if col.name.endswith(("assets", "tags", "outputs")) else "'{}'"
+                    if default is None:
+                        continue  # coluna obrigatória sem padrão conhecido: exige migração manual
+                    ddl += f" NOT NULL DEFAULT {default}"
+                conn.execute(text(ddl))
 
 
 @contextmanager

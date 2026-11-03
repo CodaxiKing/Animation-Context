@@ -131,6 +131,10 @@ class ComfyClient:
         else:
             self._req("POST", "/queue", json={"delete": [prompt_id]})
 
+    def free(self) -> None:
+        """Descarrega os modelos da VRAM (útil antes de rodar outro modelo de GPU, como o de voz)."""
+        self._req("POST", "/free", json={"unload_models": True, "free_memory": True})
+
     def download(self, file: dict, dest_dir: Path) -> Path:
         r = self._req("GET", "/view", params={"filename": file["filename"],
                                               "subfolder": file.get("subfolder", ""),

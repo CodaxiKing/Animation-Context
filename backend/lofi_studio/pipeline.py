@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from . import keyframes, motor, story_analysis, style_master
+from . import keyframes, motor, story_analysis, style_master, voices
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -407,3 +407,127 @@ def generate_keyframes_task(ctx: JobContext) -> dict:
         ready_idx = [sc.index for sc in ready]
     return {"generated": generated, "errors": errors, "scenes_ready": ready_idx,
             "scenes_blocked": blocked}
+
+
+# --- vozes (Chatterbox) e tempo das cenas pelo áudio -------------------------------------
+def _free_comfyui_vram() -> None:
+    from .comfyui.registry import LOCAL_HOSTS, get_registry
+    from urllib.parse import urlparse
+    reg = get_registry()
+    for inst in reg.all():
+        if urlparse(inst.url).hostname in LOCAL_HOSTS:
+            try:
+                with reg.client(inst) as c:
+                    c.free()
+            except Exception:
+                pass  # ComfyUI fechado: nada a liberar
+
+
+def voice_lines(s: Session, episode: Episode, *, seed: int | None = None) -> tuple[list[voices.Line], set[str]]:
+    """Falas do episódio, uma por cena. Devolve (linhas, vozes sem amostra cadastrada)."""
+    series = s.get(Series, episode.series_id)
+    chars = {c.slug: c for c in s.exec(select(Character).where(Character.series_id == series.id))}
+    scenes = s.exec(select(Scene).where(Scene.episode_id == episode.id).order_by(Scene.index)).all()
+    lines_dir = episode_dir(series, episode) / "voices" / "lines"
+    lines, missing = [], set()
+    for sc in scenes:
+        notes = sc.shot.get("director_notes", {})
+        voice, text = notes.get("speaker"), notes.get("dialogue")
+        if not voice and voices.NARRATOR in chars:
+            voice, text = voices.NARRATOR, sc.text
+        if not voice or not text:
+            continue
+        char = chars.get(voice)
+        sample = s.get(Asset, char.voice.get("sample_asset")) if char and char.voice.get("sample_asset") else None
+        if sample is None or not Path(sample.path).is_file():
+            missing.add(voice)
+            continue
+        actor = next((a for a in sc.shot.get("actors", []) if a.get("char") == voice), {})
+        emotion = actor.get("emotion", "neutral")
+        exaggeration, cfg_weight, temperature = voices.voice_params(char.voice, emotion)
+        lines.append(voices.Line(
+            scene_id=sc.id, index=sc.index, voice=voice, text=voices.clean_text(text), emotion=emotion,
+            reference=Path(sample.path), exaggeration=exaggeration, cfg_weight=cfg_weight, temperature=temperature,
+            seed=seed if seed is not None else char.voice.get("seed"),
+            out=lines_dir / f"{sc.index:03d}_{voice}.wav"))
+    return lines, missing
+
+
+@task("generate_voices")
+def generate_voices_task(ctx: JobContext) -> dict:
+    """Gera as falas (só as que mudaram), monta as trilhas por personagem e ajusta o tempo das cenas."""
+    with session_scope() as s:
+        ep = s.get(Episode, ctx.episode_id)
+        series = s.get(Series, ep.series_id)
+        lines, missing = voice_lines(s, ep, seed=ctx.params.get("seed"))
+        ep_folder = episode_dir(series, ep)
+        series_folder = series_dir(series)
+    if not lines:
+        raise ValueError("nenhuma fala com voz cadastrada" + (f"; faltam amostras de: {sorted(missing)}" if missing else ""))
+
+    def fresh(ln):
+        meta = ln.out.with_suffix(".json")
+        return ln.out.is_file() and meta.is_file() and json.loads(meta.read_text())["key"] == ln.cache_key()
+
+    todo = [ln for ln in lines if not fresh(ln)]
+    errors = {}
+    if todo:
+        if get_settings().free_comfyui_vram_before_voice:
+            ctx.progress(0.02, "liberando VRAM do ComfyUI")
+            _free_comfyui_vram()
+
+        def on_event(ev):
+            if ev.get("event") == "loaded":
+                ctx.progress(0.1, f"modelo de voz carregado ({ev.get('device')})")
+            elif ev.get("event") in ("done", "error"):
+                ctx.progress(0.1 + 0.75 * (ev["index"] + 1) / len(todo), f"fala {ev['index'] + 1}/{len(todo)}")
+
+        try:
+            results = voices.run_chatterbox(todo, on_event=on_event, should_cancel=ctx.should_cancel)
+        except voices.VoiceCancelled:
+            raise JobCancelled() from None
+        for i, ln in enumerate(todo):
+            ev = results.get(i, {"event": "error", "error": "sem resposta do worker"})
+            if ev["event"] == "done" and ln.out.is_file():
+                ln.out.with_suffix(".json").write_text(json.dumps({"key": ln.cache_key(), "text": ln.text,
+                                                                   "emotion": ln.emotion, "seed": ln.seed}))
+            else:
+                errors[ln.index] = ev.get("error")
+
+    ctx.progress(0.9, "montando trilhas e ajustando o tempo das cenas")
+    usable = {ln.index: (ln.voice, ln.out) for ln in lines if ln.index not in errors and ln.out.is_file()}
+    if not usable:
+        raise voices.VoiceError(f"nenhuma fala gerada: {errors}")
+    tracks, spans = voices.build_tracks(usable, ep_folder / "voices")
+
+    with session_scope() as s:
+        ep = s.get(Episode, ctx.episode_id)
+        scenes = s.exec(select(Scene).where(Scene.episode_id == ep.id).order_by(Scene.index)).all()
+        pos = {sc.index: i for i, sc in enumerate(scenes)}
+        speech = {pos[idx]: b - a for idx, (a, b) in spans.items()}
+        times = voices.retime([sc.end - sc.start for sc in scenes], speech)
+        clips, subs = [], []
+        for sc, (start, end) in zip(scenes, times):
+            sc.start, sc.end = start, end
+            sc.shot = {**sc.shot, "start": start, "end": end}
+            s.add(sc)
+            if sc.index in spans:
+                voice = usable[sc.index][0]
+                src = list(spans[sc.index])
+                clip = {"voice": voice, "src": src, "at": round(start + voices.LEAD_S, 3)}
+                if voice == voices.NARRATOR:
+                    clip["acoustic"] = None   # narrador: voz de estúdio, sem eco do lugar
+                clips.append(clip)
+                text = next(ln.text for ln in lines if ln.index == sc.index)
+                subs.append({"voice": voice, "src": src, "text": voices.subtitle_chunks(text)})
+        ep.spec = {**ep.spec, "total": times[-1][1] if times else ep.spec.get("total", 0),
+                   "voices": {v: p.relative_to(series_folder).as_posix() for v, p in tracks.items()},
+                   "clips": clips, "subs": subs}
+        for voice, path in tracks.items():
+            s.add(Asset(series_id=ep.series_id, kind="voice_track", path=str(path),
+                        tags=[f"ep{ep.number:02d}", voice], job_id=ctx.job_id))
+        s.add(ep)
+        s.commit()
+        total = ep.spec["total"]
+    return {"lines": len(lines), "generated": len(todo) - len(errors), "cached": len(lines) - len(todo),
+            "errors": errors, "missing_samples": sorted(missing), "tracks": sorted(tracks), "total": total}

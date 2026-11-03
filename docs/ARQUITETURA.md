@@ -11,6 +11,7 @@ Animation-Context/
 │   ├── style_master.py      presets de estilo e montagem de prompts
 │   ├── pipeline.py          tarefas de produção (episódio, cena, imagens-chave, export, arte de personagem/cenário)
 │   ├── story_analysis.py    roteiro -> beats: quem fala, quem está em cena, saídas, cenário; elenco no plano
+│   ├── voices.py            falas (Chatterbox), cache, trilhas por personagem, tempo das cenas, legendas
 │   ├── keyframes.py         cena -> fundo + poses no padrão de nomes do lofi/imagens.py; âncora do IPAdapter
 │   ├── jobs.py              fila persistida no banco (backend local com threads)
 │   ├── engines.py           catálogo dos serviços e de quem executa cada um
@@ -20,6 +21,7 @@ Animation-Context/
 │       ├── dependencies.py  nós e modelos ausentes, com orientação de instalação (nunca baixa nada)
 │       ├── registry.py      várias instâncias: detecção local, saúde, cache de capacidades, escolha
 │       └── orchestrator.py  execução ponta a ponta: novas tentativas, cancelamento, VRAM, auditoria
+├── backend/voice_worker/    worker do Chatterbox (roda no Python com torch; sem dependência do estúdio)
 ├── workflows/               workflows ComfyUI (formato API) usados pelas tarefas
 └── docs/
 ```
@@ -53,6 +55,10 @@ Animation-Context/
   - até 3 por plano, com lados estáveis na tela (regra dos 180°);
   - 3/4 frente a frente;
   - `camera.close` ou `camera.alvo` em quem fala.
+- **Voz em processo separado.** O Chatterbox roda no Python configurado em `LOFI_CHATTERBOX_PYTHON` e conversa
+  com a API por JSON. Antes de gerar, o V5 libera a VRAM do ComfyUI local. Depois da voz, a duração de cada cena
+  passa a ser a da fala real, e o spec ganha `voices`, `clips` e `subs` no formato do `lofi.render`. Detalhes em
+  [VOZES.md](VOZES.md).
 - **Imagens-chave, não vídeo gerado.** A IA gera o fundo de cada cenário e as poses de cada personagem, com a
   identidade travada por uma imagem âncora no IPAdapter. O motor anima a composição no modo "imagens": câmera,
   paralaxe, respiração, piscar e quem fala se mexendo. As imagens ficam na biblioteca da série e são

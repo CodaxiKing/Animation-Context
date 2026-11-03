@@ -36,6 +36,9 @@ class Character(SQLModel, table=True):
     rig: dict[str, Any] = json_field()     # ficha travada no formato do motor (top, legs, hair...)
     locked: bool = True                    # ficha travada: o roteiro não redefine o visual
     reference_assets: list[int] = json_field(list)
+    # voz: {"provider": "chatterbox", "sample_asset": id, "exaggeration": 0.5, "cfg_weight": 0.5,
+    #       "temperature": 0.8, "seed": 7}. O personagem de slug "narrador" narra as linhas sem fala.
+    voice: dict[str, Any] = json_field()
 
 
 class Environment(SQLModel, table=True):

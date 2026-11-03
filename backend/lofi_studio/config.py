@@ -32,6 +32,15 @@ class Settings(BaseSettings):
 
     ffmpeg: str = "ffmpeg"
 
+    # Vozes (Chatterbox Multilingual) num Python separado, com torch + chatterbox-tts instalados.
+    chatterbox_python: str | None = None      # ex.: C:/tts/.venv/Scripts/python.exe
+    chatterbox_worker: Path = ROOT / "backend" / "voice_worker" / "chatterbox_worker.py"
+    chatterbox_model: str = "v3"              # t3_model: v2, v3 ou um .safetensors
+    chatterbox_ckpt_dir: Path | None = None   # checkpoint local (ex.: fine-tune pt-BR) via from_local
+    chatterbox_device: str = "cuda"
+    voice_language: str = "pt"
+    free_comfyui_vram_before_voice: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

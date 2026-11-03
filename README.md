@@ -56,6 +56,10 @@ vai para quem fala.
 7. `PATCH /api/scenes/{id}` aprova a cena ou registra uma observação. `POST /api/scenes/{id}/regenerate` corrige só aquela cena.
 8. `POST /api/episodes/{id}/export` gera o MP4 pelo `lofi.render`. Exige todas as cenas aprovadas.
 
+Vozes (Chatterbox, open-source): envie uma amostra por personagem (`POST /api/characters/{id}/voice-sample`) e rode
+`POST /api/episodes/{id}/voices`. As falas são geradas com a emoção de cada plano e as cenas passam a durar o tempo
+da fala. Instalação em [docs/VOZES.md](docs/VOZES.md).
+
 Arte por IA: `POST /api/characters/{id}/generate-sheet` e `POST /api/environments/{id}/generate-art`, ambos via ComfyUI.
 
 Mais detalhes em [docs/ARQUITETURA.md](docs/ARQUITETURA.md).
