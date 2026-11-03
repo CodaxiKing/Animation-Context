@@ -11,6 +11,7 @@ pillow
 numpy
 scipy
 opencv-python-headless
+imageio-ffmpeg     # FFmpeg embutido, usado quando não há ffmpeg no PATH
 # testes
 pytest
 # produção opcional:

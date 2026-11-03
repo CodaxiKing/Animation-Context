@@ -1,0 +1,22 @@
+{
+  "duration": 8.0,
+  "fps": 24,
+  "zoom": 0.06,
+  "focus": [780, 330],
+  "handheld": 2.2,
+  "eyes": [
+    {"box": [722, 225, 759, 273], "lid": [726, 248, 756, 248]},
+    {"box": [810, 232, 844, 283], "lid": [813, 257, 841, 257]}
+  ],
+  "blinks": [1.9, 5.55],
+  "breath_box": [0, 330, 1080, 900],
+  "breath_px": 2.0,
+  "lights": [{"lens": [972, 762], "toward": [1110, 810], "half_angle": 19, "reach": 300, "strength": 0.3}],
+  "sky_box": [860, 0, 1600, 300],
+  "lightning": [3.2],
+  "puddle_box": [1000, 700, 1600, 900],
+  "rain": 1.0,
+  "rain_angle": -3.0,
+  "grain": 3.0,
+  "audio": "chuva_fora"
+}
