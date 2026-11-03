@@ -134,7 +134,8 @@ def analyze(script: str, characters: list[dict], environments: list[dict] | None
         else:
             beat.mentioned = _mentions(line, index)
 
-        beat.environment = _environment(line, environments) or environment
+        # o lugar vem do cabeçalho e da narração; fala cita lugares sem mudar de cena ("ninguém responde no rádio")
+        beat.environment = (None if speaker else _environment(line, environments)) or environment
         environment = beat.environment
 
         for slug in ([speaker] if speaker else []) + beat.mentioned:

@@ -18,6 +18,20 @@ python -m venv .venv
 
 FFmpeg no PATH é necessário só para exportar o vídeo final. As prévias de cena não dependem dele.
 
+## Painel
+
+Interface web (React + TypeScript) para criar séries, cadastrar o elenco (referência e voz), escrever o roteiro,
+rodar cada etapa da produção com barra de progresso, revisar e aprovar cena a cena e assistir o vídeo final.
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+Depois de compilado, o painel é servido pela própria API em http://127.0.0.1:8000/. Para desenvolver com recarga
+automática, use `npm run dev` (http://localhost:5173, com a API rodando na porta 8000).
+
 ## Rodar
 
 ```bash

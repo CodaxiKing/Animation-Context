@@ -361,6 +361,23 @@ def get_episode(episode_id: int, s: Session = SessionDep):
     return _get(s, Episode, episode_id)
 
 
+class EpisodePatch(BaseModel):
+    title: str | None = None
+    script: str | None = Field(default=None, min_length=1)
+
+
+@api.patch("/episodes/{episode_id}")
+def update_episode(episode_id: int, body: EpisodePatch, s: Session = SessionDep):
+    """Edita título e roteiro. As cenas só mudam ao planejar de novo."""
+    ep = _get(s, Episode, episode_id)
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(ep, k, v)
+    s.add(ep)
+    s.commit()
+    s.refresh(ep)
+    return ep
+
+
 class GenerateEpisode(BaseModel):
     duration: float | None = Field(default=None, gt=0, le=3600)
 
@@ -658,3 +675,9 @@ def comfy_check(workflow: str, instance: str | None = None):
 
 
 app.include_router(api)
+
+# Painel (frontend/dist, gerado por `npm run build`): servido na raiz, depois das rotas da API.
+_PANEL = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _PANEL.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_PANEL, html=True), name="painel")

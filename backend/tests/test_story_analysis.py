@@ -37,6 +37,12 @@ def test_speakers_cast_exits_and_scene_breaks():
     assert beats[7].speaker == "geraldo"                     # primeiro nome de "Geraldo Souza"
 
 
+def test_dialogue_does_not_change_place():
+    envs = ENVS + [{"slug": "radio", "name": "rádio"}]
+    beats = analyze("CENA 1 · MERCADO\nGeraldo olha o celular.\nGeraldo: Ninguém responde no rádio.\nBia anda.", CHARS, envs)
+    assert [b.environment for b in beats] == ["mercado", "mercado", "mercado"]
+
+
 def test_narration_with_colon_is_not_dialogue():
     beats = analyze("Ela pega a lanterna: está sem pilha.\nNinguém: nada.", CHARS)
     assert all(b.speaker is None for b in beats)
