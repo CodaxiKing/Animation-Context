@@ -258,14 +258,11 @@ def _audio(scene: Scene, path: Path) -> Path:
 
 
 def _ffmpeg() -> str:
-    import shutil
-    if shutil.which("ffmpeg"):
-        return "ffmpeg"
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError as e:
-        raise RuntimeError("FFmpeg não encontrado: instale o FFmpeg ou `pip install imageio-ffmpeg`") from e
+    from . import motor
+    exe = motor.ffmpeg_exe()
+    if not exe:
+        raise RuntimeError("FFmpeg não encontrado: instale o FFmpeg ou `pip install imageio-ffmpeg`")
+    return exe
 
 
 if __name__ == "__main__":

@@ -60,16 +60,19 @@ class FakeComfy:
     """Servidor ComfyUI de mentira para httpx.MockTransport."""
 
     def __init__(self, *, nodes=None, checkpoints=("model_a.safetensors",), polls_until_done=1,
-                 fail_times=0, queue_len=0, image_bytes=None):
+                 fail_times=0, queue_len=0, image_bytes=None, video_bytes=None):
         self.nodes = set(nodes or {"CheckpointLoaderSimple", "CLIPTextEncode", "EmptyLatentImage",
                                    "KSampler", "VAEDecode", "SaveImage", "LoadImage", "IPAdapterModelLoader",
                                    "CLIPVisionLoader", "IPAdapterAdvanced", "LoadImageMask", "VAEEncode",
-                                   "SetLatentNoiseMask", "ImageCompositeMasked"})
+                                   "SetLatentNoiseMask", "ImageCompositeMasked", "UNETLoader", "CLIPLoader",
+                                   "VAELoader", "ModelSamplingSD3", "Wan22ImageToVideoLatent", "CreateVideo",
+                                   "SaveVideo"})
         self.checkpoints = list(checkpoints)
         self.polls_until_done = polls_until_done
         self.fail_times = fail_times
         self.queue_len = queue_len
         self.image_bytes = image_bytes
+        self.video_bytes = video_bytes
         self.prompts: dict[str, dict] = {}
         self.polls: dict[str, int] = {}
         self.uploads: list[str] = []
@@ -101,6 +104,8 @@ class FakeComfy:
             return httpx.Response(200, json=["checkpoints", "loras"])
         if path == "/models/checkpoints":
             return httpx.Response(200, json=self.checkpoints)
+        if path in ("/models/diffusion_models", "/models/text_encoders", "/models/vae"):
+            return httpx.Response(200, json=[])
         if path == "/models/loras":
             return httpx.Response(200, json=[])
         if path == "/queue" and method == "GET":
@@ -135,10 +140,14 @@ class FakeComfy:
                 return httpx.Response(200, json={pid: {"outputs": {}, "status": {
                     "status_str": "error", "completed": False,
                     "messages": [["execution_error", {"exception_message": "CUDA out of memory"}]]}}})
+            is_video = any(n["class_type"] == "SaveVideo" for n in self.prompts[pid].values())
+            ext = "mp4" if is_video else "png"
             return httpx.Response(200, json={pid: {"outputs": {"7": {"images": [
-                {"filename": f"{pid}_00001_.png", "subfolder": "lofi", "type": "output"}]}},
+                {"filename": f"{pid}_00001_.{ext}", "subfolder": "lofi", "type": "output"}]}},
                 "status": {"status_str": "success", "completed": True, "messages": []}}})
         if path == "/view":
+            if request.url.params["filename"].endswith(".mp4"):
+                return httpx.Response(200, content=self.video_bytes or b"", headers={"content-type": "video/mp4"})
             return httpx.Response(200, content=self.image_bytes or _png(), headers={"content-type": "image/png"})
         return httpx.Response(404, json={"error": path})
 

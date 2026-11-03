@@ -60,15 +60,48 @@ def read_motor_series(slug: str) -> dict:
             "world": load("mundo.json"), "bible": bible.read_text(encoding="utf-8") if bible.is_file() else ""}
 
 
+def ffmpeg_exe() -> str | None:
+    """FFmpeg do sistema; sem ele, o binário do pacote imageio-ffmpeg."""
+    found = shutil.which(get_settings().ffmpeg)
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError):
+        return None
+
+
+def _ffmpeg_bin_dir() -> Path | None:
+    """Pasta com um executável chamado `ffmpeg`, para o lofi.render (que chama "ffmpeg" pelo nome)."""
+    if shutil.which("ffmpeg"):
+        return None
+    exe = ffmpeg_exe()
+    if not exe:
+        return None
+    bindir = get_settings().data_dir / "bin"
+    target = bindir / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if not target.exists():
+        bindir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(exe, target)          # link: não ocupa espaço
+        except OSError:
+            shutil.copy2(exe, target)
+    return bindir
+
+
 def _env() -> dict:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(motor_dir()) + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    bindir = _ffmpeg_bin_dir()
+    if bindir:
+        env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
     return env
 
 
 def ffmpeg_available() -> bool:
-    return bool(shutil.which(get_settings().ffmpeg))
+    return ffmpeg_exe() is not None
 
 
 def render_frames(spec_path: Path, times: list[float], timeout: int = 300) -> list[Path]:
@@ -84,8 +117,11 @@ def render_frames(spec_path: Path, times: list[float], timeout: int = 300) -> li
 
 def render_video(spec_path: Path, jobs: int = 2, timeout: int = 3 * 3600) -> Path:
     if not ffmpeg_available():
-        raise RuntimeError("FFmpeg não encontrado no PATH; instale-o para exportar vídeo")
-    args = [sys.executable, "-m", "lofi.render", str(spec_path), "--jobs", str(jobs)]
+        raise RuntimeError("FFmpeg não encontrado: instale o FFmpeg ou `pip install imageio-ffmpeg`")
+    args = [sys.executable, "-m", "lofi.render", str(spec_path)]
+    if shutil.which("ffprobe"):
+        args += ["--jobs", str(jobs)]     # paralelo com cache confere os blocos com ffprobe
+    # sem ffprobe (só o FFmpeg do imageio-ffmpeg): render num processo só, que não precisa dele
     res = subprocess.run(args, cwd=motor_dir(), env=_env(), capture_output=True, text=True,
                          encoding="utf-8", errors="replace", timeout=timeout)
     if res.returncode != 0:

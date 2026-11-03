@@ -414,6 +414,27 @@ def generate_voices(episode_id: int, body: VoicesIn, s: Session = SessionDep):
                                          episode_id=episode_id)}
 
 
+class VideoClipsIn(BaseModel):
+    scenes: list[int] = Field(min_length=1, max_length=40)   # índices das cenas a animar
+    seconds: float | None = Field(default=None, gt=0.5, le=5.0)
+    seed: int | None = None
+    instance: str | None = None
+    prompt_extra: str = Field(default="", max_length=400)
+    workflow: str = Field(default="wan22_i2v", pattern=SLUG)
+
+
+@api.post("/episodes/{episode_id}/video-clips", status_code=202)
+def generate_video_clips(episode_id: int, body: VideoClipsIn, s: Session = SessionDep):
+    """Anima cenas escolhidas com Wan 2.2 (image-to-video) a partir da prévia; o clipe entra no export."""
+    ep = _get(s, Episode, episode_id)
+    have = {sc.index for sc in s.exec(select(Scene).where(Scene.episode_id == ep.id))}
+    unknown = sorted(set(body.scenes) - have)
+    if unknown:
+        raise HTTPException(422, f"cenas inexistentes: {unknown}")
+    return {"job_id": get_queue().submit("generate_video_clips", body.model_dump(exclude_none=True),
+                                         episode_id=episode_id)}
+
+
 @api.get("/episodes/{episode_id}/scenes")
 def list_scenes(episode_id: int, s: Session = SessionDep):
     return s.exec(select(Scene).where(Scene.episode_id == episode_id).order_by(Scene.index)).all()

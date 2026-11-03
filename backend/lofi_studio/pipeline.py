@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 from sqlmodel import Session, select
 
-from . import face, keyframes, motor, story_analysis, style_master, voices
+from . import compositor, face, keyframes, motor, story_analysis, style_master, voices
 from .comfyui import workflow as wfmod
 from .comfyui.orchestrator import Cancelled, run_workflow
 from .comfyui.registry import NoCompatibleInstance
@@ -218,15 +218,24 @@ def export_episode_task(ctx: JobContext) -> dict:
             if pending and not ctx.params.get("allow_unapproved"):
                 raise ValueError(f"cenas não aprovadas: {pending}")
             spec_path = write_spec(s, ep)
+            series = s.get(Series, ep.series_id)
+            clips = [(series_dir(series) / sc.shot["video_clip"], sc.start, sc.end)
+                     for sc in sorted(scenes, key=lambda x: x.index) if sc.shot.get("video_clip")]
         ctx.progress(0.1, "renderizando vídeo")
         out = motor.render_video(spec_path)
+        clips = [c for c in clips if c[0].is_file()]
+        if clips:
+            ctx.progress(0.9, f"aplicando {len(clips)} clipe(s) de vídeo")
+            tmp = out.with_name(out.stem + "_clipes.mp4")
+            compositor.splice(out, clips, tmp)
+            tmp.replace(out)
         with session_scope() as s:
             ep = s.get(Episode, ctx.episode_id)
             ep.output_path, ep.status = str(out), EpisodeStatus.done
             s.add(ep)
             s.add(Asset(series_id=ep.series_id, kind="video", path=str(out), tags=[f"ep{ep.number:02d}"]))
             s.commit()
-        return {"video": str(out)}
+        return {"video": str(out), "video_clips": len(clips)}
     except Exception:
         _set_episode_status(ctx.episode_id, EpisodeStatus.failed)
         raise
@@ -606,3 +615,78 @@ def generate_voices_task(ctx: JobContext) -> dict:
         total = ep.spec["total"]
     return {"lines": len(lines), "generated": len(todo) - len(errors), "cached": len(lines) - len(todo),
             "errors": errors, "missing_samples": sorted(missing), "tracks": sorted(tracks), "total": total}
+
+
+# --- clipes de vídeo (Wan 2.2 image-to-video) ---------------------------------------------
+WAN_NEGATIVE = ("static image, frozen, still frame, blurry, low quality, jpeg artifacts, deformed, distorted face, "
+                "extra limbs, extra fingers, bad hands, flicker, text, subtitles, watermark, logo, 3d render, "
+                "photorealistic, bright saturated colors, morphing, melting")
+MAX_CLIP_FRAMES = 121
+
+
+def clip_length(seconds: float, fps: int = 24) -> int:
+    """Quadros no formato do Wan (4n + 1), entre 17 e 121."""
+    n = round(seconds * fps / 4)
+    return max(17, min(MAX_CLIP_FRAMES, 4 * n + 1))
+
+
+def clip_prompt(preset, scene: Scene, extra: str = "") -> str:
+    notes = scene.shot.get("director_notes", {})
+    motion = []
+    if any(a.get("run") for a in scene.shot.get("actors", [])):
+        motion.append("the character runs")
+    elif any(a.get("walk") for a in scene.shot.get("actors", [])):
+        motion.append("the character walks")
+    if notes.get("speaker"):
+        motion.append("the character speaks with small natural head movement")
+    motion.append("subtle natural motion, breathing, hair and clothes moving slightly, slow cinematic camera")
+    return (f"{preset.short_prompt}. {scene.text}. " + ", ".join(motion) + (f". {extra}" if extra else "")
+            + ". Keep the exact same art style, character design and colors as the first frame.")
+
+
+@task("generate_video_clips")
+def generate_video_clips_task(ctx: JobContext) -> dict:
+    """Anima a prévia de cada cena escolhida com o Wan 2.2 e liga o clipe à cena (entra no export)."""
+    with session_scope() as s:
+        ep = s.get(Episode, ctx.episode_id)
+        series = s.get(Series, ep.series_id)
+        preset = style_master.get(series.style_preset)
+        wanted = set(ctx.params["scenes"])
+        scenes = [sc for sc in s.exec(select(Scene).where(Scene.episode_id == ep.id).order_by(Scene.index))
+                  if sc.index in wanted]
+        missing_preview = [sc for sc in scenes if not sc.preview_path or not Path(sc.preview_path).is_file()]
+        if missing_preview:
+            render_previews(s, ep, missing_preview)
+        jobs = [(sc.id, sc.index, Path(sc.preview_path), clip_prompt(preset, sc, ctx.params.get("prompt_extra", "")),
+                 min(ctx.params.get("seconds") or (sc.end - sc.start), MAX_CLIP_FRAMES / 24)) for sc in scenes]
+        clip_dir = episode_dir(series, ep) / "clips"
+        series_folder = series_dir(series)
+    made, errors = {}, {}
+    for i, (scene_id, index, image, prompt, seconds) in enumerate(jobs):
+        def progress(p, i=i):
+            frac = p.value / p.max if p.max else 0
+            ctx.progress(0.05 + 0.9 * (i + frac) / len(jobs), f"cena {index}: Wan 2.2 {p.phase}")
+        ctx.progress(0.05 + 0.9 * i / len(jobs), f"cena {index} ({i + 1}/{len(jobs)})")
+        try:
+            assets = _run_comfy(ctx, ctx.params.get("workflow", "wan22_i2v"),
+                                {"prompt": prompt, "negative": WAN_NEGATIVE, "length": clip_length(seconds)},
+                                series_folder / "assets" / "raw", "video_clip", series.id,
+                                [f"ep{ep.number:02d}", f"scene{index}"], images={"image": image}, on_progress=progress)
+            video = next((Path(a.path) for a in assets if Path(a.path).suffix.lower() in (".mp4", ".webm", ".mov")),
+                         None)
+            if video is None:
+                raise RuntimeError("o workflow não devolveu um arquivo de vídeo")
+            clip_dir.mkdir(parents=True, exist_ok=True)
+            with session_scope() as s:
+                sc = s.get(Scene, scene_id)
+                dest = clip_dir / f"scene{index:03d}_v{sc.version}{video.suffix}"
+                shutil.copy2(video, dest)
+                sc.shot = {**sc.shot, "video_clip": dest.relative_to(series_folder).as_posix()}
+                s.add(sc)
+                s.commit()
+            made[index] = str(dest)
+        except (JobCancelled, Cancelled, NoCompatibleInstance):
+            raise
+        except Exception as e:
+            errors[index] = f"{type(e).__name__}: {e}"
+    return {"clips": made, "errors": errors}

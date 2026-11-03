@@ -78,6 +78,36 @@ mudam e a troca não "pula" na tela. Usa só nós nativos do ComfyUI, sem pacote
 - **`denoise`** (padrão 0,72, em `face_inpaint.json`): se os olhos ou a boca não mudam o suficiente, suba para 0,8.
   Se o rosto muda de estilo, desça para 0,6.
 
+## Vídeo com Wan 2.2 (image-to-video)
+
+O **Wan 2.2 TI2V 5B** anima a prévia de uma cena (fundo + personagem já montados) em um clipe de 2 a 5 s.
+Segundo a documentação do ComfyUI, o 5B cabe em 8 GB com o descarregamento nativo de memória. As versões 14B não
+são indicadas para 8 GB.
+
+| Arquivo | Pasta | Tamanho aproximado |
+|---|---|---|
+| `wan2.2_ti2v_5B_fp16.safetensors` | `ComfyUI/models/diffusion_models/` | ~10 GB |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | `ComfyUI/models/text_encoders/` | ~6,7 GB |
+| `wan2.2_vae.safetensors` | `ComfyUI/models/vae/` | ~1,4 GB |
+
+Os três estão no repositório `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` do Hugging Face. **São cerca de 18 GB.**
+Libere espaço em disco antes de baixar.
+
+```
+GET  /api/comfyui/workflows/wan22_i2v/check      confere nós e modelos
+POST /api/episodes/{id}/video-clips  {"scenes": [0, 4], "seconds": 3, "seed": 7}
+```
+
+- **Use em poucas cenas.** Em uma 2060S, cada clipe leva vários minutos. Bons candidatos são ação, abertura e sustos.
+  Diálogo funciona melhor com as imagens-chave animadas pelo motor, porque a boca segue a voz.
+- **Partida e prompt.** O clipe parte da prévia da cena, então o personagem começa idêntico ao da biblioteca.
+  O prompt reúne o estilo, o texto da linha e o movimento (correr, andar, falar). Use `prompt_extra` para pedir algo
+  específico, como "lightning flashes", "the camera slowly pushes in".
+- **Na exportação**, o clipe entra por cima do render do motor, exatamente no tempo da cena, e o áudio (vozes,
+  efeitos, trilha) é mantido. Se o clipe for mais curto que a cena, o último quadro fica parado até o fim.
+- **Erros de nós.** Os nomes dos nós (`Wan22ImageToVideoLatent`, `CreateVideo`, `SaveVideo`) seguem o exemplo
+  oficial do ComfyUI. Se a sua versão recusar algum, a checagem de dependências mostra qual. Atualize o ComfyUI.
+
 ## Ajustes finos
 
 Os parâmetros ficam em `_lofi.defaults` de cada workflow, ou vão no corpo da chamada:

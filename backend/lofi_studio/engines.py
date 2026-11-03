@@ -49,8 +49,9 @@ ENGINES = [
                "Chuva, névoa, paralaxe e detalhes vivos."),
     EngineInfo("cinematic_camera", "Cinematic Camera Engine", "motor", "motor-lofi: render + travelling",
                "Zoom, travelling, câmera na mão, foco seletivo."),
-    EngineInfo("video_generation", "Video Generation Engine", "planned", "ComfyUI (workflows de vídeo)",
-               "Nenhum workflow de vídeo foi integrado ainda."),
+    EngineInfo("video_generation", "Video Generation Engine", "ready", "ComfyUI: Wan 2.2 TI2V 5B (image-to-video)",
+               "Anima a prévia das cenas escolhidas (2-5 s, 24 fps, vertical); o clipe entra por cima do render "
+               "do motor no export, mantendo o áudio."),
     EngineInfo("voice_generation", "Voice Generation Engine", "ready", "Chatterbox Multilingual (worker local)",
                "Voz clonada por personagem a partir de amostra, emoção do plano na exaggeration, narrador opcional, "
                "cache por fala; cenas reajustadas ao tempo real da fala, com legendas."),
